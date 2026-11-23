@@ -775,3 +775,42 @@ def test_rate_limit_state_blocks_calls_until_reset(db_url, monkeypatch):
         limits.clear_limit(conn, "codex")                                    # 人が解除を確かめた
     assert asyncio.run(g.run("p", cwd=Path("."))).ok and Inner.calls == 2
     config.get_settings.cache_clear()
+
+
+# ------------------------------------------------------------------ 公開データセットのカタログと下見
+
+
+def test_dataset_catalog_only_lists_allowed_hosts_with_license():
+    from aar import datasets as ds
+    from aar.config import load_policy
+
+    catalog = ds.load_catalog()
+    hosts = load_policy().safety.dataset_hosts
+    assert catalog and all(d.get("license") and d.get("url", "").startswith("https://") and d.get("filename") for d in catalog)
+    assert all(ds.host_allowed(__import__("urllib.parse").parse.urlparse(d["url"]).hostname, hosts) for d in catalog)
+    text = ds.catalog_text(catalog, hosts)
+    assert "license: CC BY 4.0" in text and len(text.splitlines()) == 2 * len(catalog)
+    assert ds.catalog_text(catalog, ["example.org"]) == ""                  # 許していないホストのデータは見せない
+
+
+def test_dataset_preview_reads_inside_zip_without_extracting(tmp_path):
+    import io
+    import zipfile
+
+    from aar import datasets as ds
+
+    ext = tmp_path / "data" / "external"
+    ext.mkdir(parents=True)
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as z:
+        z.writestr("deep.csv", "x;y\n1;2\n")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("data.tsv", "ham\thello\nspam\twin a prize\n" * 50)
+        z.writestr("inner.zip", inner.getvalue())
+        z.writestr("blob.bin", b"\x00\x01\x02" * 100)
+    (ext / "d.zip").write_bytes(buf.getvalue())
+    out = ds.preview_files(tmp_path, [{"filename": "d.zip"}])
+    assert "data.tsv" in out and "100 行" in out and "ham\thello" in out
+    assert "deep.csv" in out and "x;y" in out and "バイナリ" in out
+    assert sorted(p.name for p in ext.iterdir()) == ["d.zip"]               # 展開したファイルを残さない
