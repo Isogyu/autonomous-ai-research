@@ -61,8 +61,33 @@ def _swap(value: Any, src: str, dst: str) -> Any:
     return value.replace(src, dst) if isinstance(value, str) else value
 
 
-def clone_project(src_id: str) -> dict[str, Any]:
-    """完了した研究を、検証用として複製する。複製の研究 ID などを返す。"""
+def scrub_history(ws: Path, paths: list[str]) -> dict[str, Any]:
+    """検証用の複製の履歴から、指定したファイルを取り除く（全コミットを書き換える）。
+
+    元の研究の履歴に、いまの基準では公開できないもの（原論文の要旨の写し）が残っている場合に、複製の側でだけ使う。
+    コミットのハッシュが変わるので、DB にある事前登録のコミットの記録とは一致しなくなる（検証用なので許容する）。
+    """
+    import os
+    import shlex
+
+    before = wsmod.head(ws)
+    cmd = "git rm -r --cached --ignore-unmatch -q -- " + " ".join(shlex.quote(p) for p in paths)
+    env = os.environ | {"FILTER_BRANCH_SQUELCH_WARNING": "1"}
+    subprocess.run(["git", "filter-branch", "-f", "--index-filter", cmd, "--tag-name-filter", "cat", "--", "--all"],
+                   cwd=ws, check=True, capture_output=True, timeout=900, env=env)
+    for ref in wsmod.git(ws, "for-each-ref", "--format=%(refname)", "refs/original").splitlines():
+        wsmod.git(ws, "update-ref", "-d", ref)
+    wsmod.git(ws, "reflog", "expire", "--expire=now", "--all")
+    wsmod.git(ws, "gc", "--prune=now", "--quiet", check=False)
+    wsmod.git(ws, "reset", "--hard", "-q")
+    return {"paths": paths, "head_before": before, "head_after": wsmod.head(ws)}
+
+
+def clone_project(src_id: str, *, scrub: bool = False) -> dict[str, Any]:
+    """完了した研究を、検証用として複製する。複製の研究 ID などを返す。
+
+    scrub を指定すると、複製の履歴から「過去のコミットにだけ残る第三者の文章」のファイルを取り除く。
+    """
     settings, policy = get_settings(), load_policy()
     new_id = f"FX-{datetime.now(UTC):%Y%m%d}-{secrets.token_hex(3)}"
     src_ws, new_root = settings.workspaces_dir / src_id, settings.workspaces_dir / new_id
@@ -91,6 +116,25 @@ def clone_project(src_id: str) -> dict[str, Any]:
             wsmod.git(ws, "tag", "-f", tag, sha, check=False)
         if (src_ws / "audits").exists():
             shutil.copytree(src_ws / "audits", new_root / "audits", ignore=shutil.ignore_patterns("target"))
+        scrubbed: dict[str, Any] | None = None
+        if scrub:
+            from aar.publish import required as req
+            paper = fetch_one(conn, """SELECT p.id, p.abstract FROM research_proposals r JOIN papers p ON p.id = r.paper_id
+                                       WHERE r.id = %s""", (src["proposal_id"],))
+            texts = [("原論文の要旨", (paper or {}).get("abstract") or "")]
+            ft = settings.data_dir / "papers" / f"{(paper or {}).get('id')}.txt"
+            if ft.exists():
+                texts.append(("原論文の本文", ft.read_text(encoding="utf-8", errors="ignore")))
+            removed: list[str] = []
+            for _ in range(8):      # 同じ内容が複数のパスにあると1回では取り切れないので、無くなるまで繰り返す
+                hits = req.check_third_party_text(ws, texts)
+                paths = sorted({e.split("（", 1)[0] for e in hits["evidence"]} if hits["status"] == "violation" else set())
+                if not paths:
+                    break
+                scrubbed = scrub_history(ws, paths)
+                removed += paths
+            if scrubbed:
+                scrubbed["paths"] = removed
         ext = src_ws / "repo" / "data" / "external"
         if ext.exists():                                                 # Git の対象外の外部データ
             shutil.copytree(ext, ws / "data" / "external", dirs_exist_ok=True)
@@ -144,8 +188,9 @@ def clone_project(src_id: str) -> dict[str, Any]:
             _insert(conn, "side_effects", r | {"idempotency_key": f"{new_id}:understand"})
         conn.execute("INSERT INTO human_interventions (project_id, kind, detail) VALUES (%s, 'select', %s)",
                      (new_id, Jsonb({"fixture_of": src_id})))
-        store.log_event(conn, new_id, new_id, "fixture_created", {"source": src_id, "source_commit": wsmod.head(src_ws / "repo")})
-    return {"project_id": new_id, "source": src_id, "workspace": str(ws)}
+        store.log_event(conn, new_id, new_id, "fixture_created", {"source": src_id, "source_commit": wsmod.head(src_ws / "repo"),
+                                                                  "history_scrubbed": scrubbed})
+    return {"project_id": new_id, "source": src_id, "workspace": str(ws), "history_scrubbed": scrubbed}
 
 
 def inject_overclaim(project_id: str) -> dict[str, Any]:

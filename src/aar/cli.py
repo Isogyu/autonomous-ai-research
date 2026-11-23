@@ -302,10 +302,11 @@ def dev_fixture(
     source_id: str,
     defect: Annotated[str, typer.Option(help="入れる不具合。overclaim: 証拠を超える主張 / none: 入れない")] = "overclaim",
     start: Annotated[bool, typer.Option(help="作ったあと、公開品質監査から実行する")] = False,
+    scrub_history: Annotated[bool, typer.Option(help="複製の履歴から、過去のコミットにだけ残る第三者の文章を取り除く")] = False,
 ) -> None:
     """公開可で完了した研究を検証用（FX-…）として複製し、複製にだけ意図的な不具合を入れる。元の研究は変えない。"""
     from aar import fixture, service
-    out = fixture.clone_project(source_id)
+    out = fixture.clone_project(source_id, scrub=scrub_history)
     if defect == "overclaim":
         out["defect"] = fixture.inject_overclaim(out["project_id"])
     elif defect != "none":
