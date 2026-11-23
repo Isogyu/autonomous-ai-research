@@ -1,0 +1,45 @@
+# 秘密情報（絶対にコミットしない）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+auth.json
+
+# 実行時データ（PostgreSQL の実データ、Temporal の履歴、研究の作業領域）
+var/
+workspaces/
+*.sqlite
+*.sqlite-*
+*.db
+
+# 外部依存の取得先（AI Scientist v3 など。リポジトリには含めない）
+vendor/
+
+# 大きな実験データ
+*.parquet
+*.npy
+*.npz
+*.safetensors
+*.onnx
+*.bin
+*.gguf
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+.coverage
+htmlcov/
+
+# OS / エディタ
+.DS_Store
+.idea/
+.vscode/
