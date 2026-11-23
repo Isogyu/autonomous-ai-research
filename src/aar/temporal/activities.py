@@ -336,11 +336,22 @@ async def research_audit(project_id: str, round_no: int) -> dict[str, Any]:
         with connect() as conn:
             prop = store.get_proposal_for_project(conn, project_id)
             prior = store.latest_findings(conn, project_id, "research") if round_no > 1 else []
+            # 原論文の書誌: 情報源ごとの取得記録（URL と取得日時）。監査担当は外部に接続できないので証拠として渡す
+            sources = fetch_all(conn, """SELECT s.source, s.source_id, s.url, s.retrieved_at FROM paper_sources s
+                                         WHERE s.paper_id = %s ORDER BY s.source""", (prop.get("paper_id"),)) if prop.get("paper_id") else []
+            paper_record = {
+                "題名": prop.get("paper_title"), "arxiv_id": prop.get("arxiv_id"), "doi": prop.get("doi"),
+                "url": prop.get("paper_url"), "公開日": prop.get("paper_published_at"), "要旨": prop.get("paper_abstract"),
+                "本文の入手状況": prop.get("fulltext_status"),
+                "取得記録": [dict(s) for s in sources],
+                "注": "このシステムが論文 API（arXiv / OpenAlex / Semantic Scholar）から取得した書誌情報。本文は取得していない",
+            }
         try:
             report, res, commit = await raudit.run_research_audit(
                 ctx.runners[choice.agent], model=choice.model, skill_dir=settings.research_audit_skill_dir, ws=ctx.ws,
                 audit_root=audit_root_of(project_id), round_no=round_no, title=project["title"], paper=_paper_text(prop),
-                prior_issues=[p for p in prior if p["severity"] in ("Critical", "Major")], heartbeat=_beat)
+                prior_issues=[p for p in prior if p["severity"] in ("Critical", "Major")], heartbeat=_beat,
+                paper_record=paper_record)
         except FileNotFoundError as e:
             raise hold("setup", str(e)) from e
         ctx.on_cost("研究独立監査", f"{project_id}:audit:research:{round_no}", res)

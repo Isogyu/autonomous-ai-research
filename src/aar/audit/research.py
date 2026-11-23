@@ -192,6 +192,15 @@ Skill が参照する references/ と assets/ も `{skill_dir}` にある。
   claims.csv の status は Verified / Supported / Inconclusive / Contradicted / Not Tested のいずれか、
   issues.csv の severity は Critical / Major / Minor / Improvement のいずれか（この綴りのまま）。
 - 実行できなかった検査は Not Tested とし、実行済みと書かない。問題が見つからないことと、問題がないことを区別する。
+- claims.csv に載せるのは、この研究が実際に行っている主張（事前登録の仮説と、対象の文書が結論として述べていること）。
+  研究が主張していない事項（たとえば原論文の実データを説明できるか）は主張として載せず、監査範囲外として
+  executive_summary.md に書く。primary_or_secondary は、事前登録の仮説に対応する主張を primary とする。
+- 原論文の書誌情報は、オーケストレーターが論文 API から取得した記録を `source_evidence/paper_record.json` に置いてある
+  （取得元の URL と取得日時つき）。このサンドボックスからは外部に接続できないので、書誌の確認にはこの記録を使い、
+  証拠の種類を「オーケストレーターが取得した API 応答」と明記する。記録に無いこと（論文の本文など）は確認できないと書く。
+- audit_status は Skill の完了条件で決める。主要な主張に判定が付き、数値と指摘から証拠を辿れ、未実施の範囲が明示され、
+  対象の保全比較が済んでいれば completed（未実施の範囲があっても、明示されていれば completed）。
+  この条件のどれかを満たせなかった場合だけ partial とし、summary の冒頭にどの条件かを書く。
 {prior}
 最後に、監査の要約を指定の JSON で返す。
 """
@@ -200,7 +209,7 @@ Skill が参照する references/ と assets/ も `{skill_dir}` にある。
 async def run_research_audit(
     runner: AgentRunner, *, model: str, skill_dir: Path, ws: Path, audit_root: Path, round_no: int, title: str,
     paper: str, prior_issues: list[dict[str, Any]], timeout_s: int = 3600,
-    heartbeat: Callable[[], None] | None = None,
+    heartbeat: Callable[[], None] | None = None, paper_record: dict[str, Any] | None = None,
 ) -> tuple[AuditReport, AgentResult, str]:
     """監査を1回実行する。(構造化した報告, エージェントの実行結果, 対象のコミット) を返す。"""
     if not skill_available(skill_dir):
@@ -211,6 +220,9 @@ async def run_research_audit(
         shutil.rmtree(audit_dir)   # 途中で止まった前回の作業は捨て、最初からやり直す
     audit_dir.mkdir(parents=True)
     commit = snapshot_target(ws, target)
+    (audit_dir / "source_evidence").mkdir()
+    (audit_dir / "source_evidence" / "paper_record.json").write_text(
+        json.dumps(paper_record or {"note": "原論文の記録なし"}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     prereg_files = sorted(str(p.relative_to(target)) for p in (target / "prereg").glob("*.json")) if (target / "prereg").exists() else []
     for name in ("claims.csv", "evidence.csv", "issues.csv", "recomputed_metrics.csv"):
         src = skill_dir / "assets" / name
