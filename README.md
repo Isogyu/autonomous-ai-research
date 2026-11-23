@@ -46,13 +46,13 @@
 - macOS、Python 3.11 以上、Docker Desktop、Git、GitHub CLI（`gh`）
 - Temporal CLI（`brew install temporal`）
 - Claude Code と Codex の CLI（どちらもログイン済みであること。API キーは使わない）
-- 研究独立監査 Skill（[skills/README.md](skills/README.md)）
+- 研究独立監査 Skill と GitHub 公開品質監査 Skill（[skills/README.md](skills/README.md)）。どちらも必須
 
 ## 導入
 
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -e ".[dev,embed]"
-scripts/install_skills.sh <研究独立監査 Skill の zip>
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev,embed,fulltext]"
+scripts/install_skills.sh <研究独立監査 Skill の zip> <GitHub 公開品質監査 Skill の zip>
 scripts/aarctl start          # PostgreSQL・Temporal・ワーカー・UI を起動
 .venv/bin/aar doctor          # 足りないものを確認
 ```
@@ -81,6 +81,7 @@ scripts/aarctl start          # 再開。実行中だった研究は続きから
 aar projects pause|resume|cancel <研究ID>
 aar projects budget <研究ID> <ドル>   # 費用上限に達して保留になったとき
 aar projects reopen <研究ID>          # 公開不可で終わった研究を、未対応の指摘の修正と独立監査からやり直す（基準は同じ）
+aar projects reopen <研究ID> --from publication   # 公開品質監査からやり直す（公開可で終わった研究も対象）
 ```
 
 成果物は `workspaces/<研究ID>/repo/`（研究ごとの Git リポジトリ、ブランチ `research/<研究ID>`）にできる。

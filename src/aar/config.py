@@ -130,6 +130,9 @@ class SafetyPolicy(BaseModel):
     experiment_timeout_minutes: int = 30
     allow_metered_api_in_experiments: bool = False
     min_free_disk_mb: int = 150
+    # 公開データセットを取得してよいホスト（サブドメインを含む）と、1ファイルの大きさの上限
+    dataset_hosts: list[str] = Field(default_factory=list)
+    dataset_max_mb: int = 200
     hold_on: list[str] = Field(default_factory=list)
 
 

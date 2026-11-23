@@ -109,6 +109,11 @@ safety:
   docker_cpus: 2
   experiment_timeout_minutes: 30
   allow_metered_api_in_experiments: false   # 実験コードから従量課金 API を呼ぶことを許すか
+  # 公開データセット: 実験の前にオーケストレーターが取得する（実験コードはネットワークなしのまま）。
+  # 取得できるのは下のホスト（サブドメインを含む）の https の URL だけ。取得したデータは Git に入れず、
+  # 取得元・ハッシュ・ライセンスの記録だけを公開候補に残す。空にすると外部データを使わない。
+  dataset_hosts: [huggingface.co, hf.co, raw.githubusercontent.com, zenodo.org, archive.ics.uci.edu, openml.org]
+  dataset_max_mb: 200
   min_free_disk_mb: 150        # ディスクの空きがこれを下回ったら、次の工程を始めずに保留にする
   # 次の事象では研究を保留にして通知する（再試行しない）:
   #   認証切れ / 費用上限 / この方針ファイルの変更 / 監査 Skill の不足 / ディスクの空き不足

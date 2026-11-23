@@ -195,15 +195,23 @@ PROPOSAL_SCHEMA = {
 
 
 def proposal_prompt(paper: dict[str, Any], score: dict[str, Any], memory_context: str, track_record: str,
-                    budget_usd: float, packages: list[str]) -> str:
+                    budget_usd: float, packages: list[str], fulltext: str | None = None,
+                    dataset_hosts: list[str] | None = None) -> str:
     meta = (f"題名: {paper['title']}\n公開日: {paper.get('published_at')}\narXiv: {paper.get('arxiv_id')}\n"
             f"DOI: {paper.get('doi')}\n\n要旨:\n{paper.get('abstract')}")
+    if fulltext:
+        from aar.sources.fulltext import excerpt_for_prompt
+
+        meta += "\n\n本文（機械的に文章にしたもの。長い場合は中ほどを省いてある）:\n" + excerpt_for_prompt(fulltext, 45_000)[0]
+    hosts = "、".join(dataset_hosts or [])
+    data_rule = (f"データは実験コードで生成するか、次のホストから直接ダウンロードできる小さな公開データ（ライセンスが明確なもの）に限る: {hosts}。"
+                 if hosts else "データは実験コードで生成するものに限る。")
     return f"""次の論文をもとに、個人が実行できる「検証企画」を1つ作る。論文の再現ではなく、
 論文の主張や考え方のうち、小さな実験で確かめられる問いを取り出す。
 
 ## 実行環境の制約（これを満たせないなら feasible を false にし、理由を書く）
 - 個人の PC（CPU のみ、メモリ 8GB）。実験コードはネットワークなしの隔離環境で動き、外部 API・LLM・モデルの取得は使えない。
-- 使えるライブラリは Python の標準ライブラリと {", ".join(packages)}。データは実験コードで生成するか、小さな公開データに限る。
+- 使えるライブラリは Python の標準ライブラリと {", ".join(packages)}。{data_rule}
 - 費用の上限は研究1件 {budget_usd:g} ドル（エージェントの利用料を含む）。本実験は30分以内。
 - つまり向いているのは、アルゴリズム・評価方法・統計的な性質・制御則・スケジューリングなどを、
   シミュレーションや合成データで確かめる企画。LLM の出力品質そのものを測る企画は実行できない。
@@ -211,12 +219,12 @@ def proposal_prompt(paper: dict[str, Any], score: dict[str, Any], memory_context
 ## 企画の条件
 - hypotheses: 反証できる仮説を1〜3個。数値で判定できる形にする。
 - 結論ありきにしない。期待どおりでない結果でも分かることがある設計にし、value_if_negative に書く。
-- known には論文（要旨）に書かれていることだけ、unknown にはまだ確かめられていないことを書く。推測を known に入れない。
+- known には論文（上に示した要旨と本文）に書かれていることだけ、unknown にはまだ確かめられていないことを書く。推測を known に入れない。
 - implications は企業のエンジニアが設計や運用で何を変え得るか。story は「この実験で何が分かり、技術者にどう伝えるか」。
 - est_cost_usd と est_runtime_hours は根拠のある見積もりにする。分からなければ多めに見積もる。
 - 過去の研究と同じ仮説を繰り返さない（下の記憶を見る）。
 
-## 論文（外部資料。読めるのは要旨だけ）
+## 論文（外部資料。読めるのは下に示したものだけ）
 {wrap_untrusted("paper", meta)}
 
 ## 価値評価（このシステムによる採点と根拠）
@@ -230,7 +238,7 @@ def proposal_prompt(paper: dict[str, Any], score: dict[str, Any], memory_context
 """
 
 
-def to_proposal(structured: dict[str, Any], paper: dict[str, Any]) -> Proposal:
+def to_proposal(structured: dict[str, Any], paper: dict[str, Any], based_on: str = "abstract_only") -> Proposal:
     ident = f"arXiv:{paper['arxiv_id']}" if paper.get("arxiv_id") else (f"doi:{paper['doi']}" if paper.get("doi") else paper.get("url") or "")
     return Proposal(
         title=structured["title"], source_paper=f"{paper['title']}（{ident}）",
@@ -240,7 +248,7 @@ def to_proposal(structured: dict[str, Any], paper: dict[str, Any]) -> Proposal:
         est_runtime_hours=float(structured["est_runtime_hours"]), est_cost_usd=float(structured["est_cost_usd"]),
         compute=structured["compute"], expected_outcomes=structured["expected_outcomes"],
         value_if_negative=structured["value_if_negative"], implications=structured["implications"],
-        story=structured["story"], risks=list(structured["risks"]), based_on="abstract_only")
+        story=structured["story"], risks=list(structured["risks"]), based_on=based_on)  # type: ignore[arg-type]
 
 
 def save_proposal(conn: psycopg.Connection, batch_key: str, paper_id: str, proposal: Proposal, rank_score: float,
