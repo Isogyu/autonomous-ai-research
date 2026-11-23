@@ -470,3 +470,57 @@ async def test_rate_limit_waits_for_reset_without_probing(stack, monkeypatch):
     assert len(waits) == 1 and waits[0]["detail"]["providers"] == ["codex"] and waits[0]["detail"]["source"] == "provider_message"
     assert [r["detail"]["by"] for r in resumed] == ["timer"] and len(notes) == 1
     assert limit_file.read_text(encoding="utf-8").startswith("codex 0 ")                 # 上限に当たったのは1回だけ
+
+
+async def test_fixture_with_injected_major_is_fixed_and_reaudited_without_touching_the_source(stack):
+    """検証用の複製に不具合を入れる → 公開品質監査が Major を検出 → 修正担当に証拠が渡る → 修正 → 再監査で合格。元の研究は変わらない。"""
+    import json
+
+    from aar import fixture, service, workspace
+    from aar.db.core import connect, fetch_all, fetch_one
+
+    proposal_id = await _proposal(stack)
+    src = (await service.select_and_start(proposal_id))["id"]
+    p = await _wait(src, ("completed", "failed"))
+    assert p["outcome"] == "publishable", p["outcome_reason"]
+    src_ws = Path(p["workspace_path"])
+    src_head, src_readme = workspace.head(src_ws), (src_ws / "README.md").read_text(encoding="utf-8")
+
+    def snapshot() -> dict:
+        with connect() as conn:
+            return {t: fetch_one(conn, f"SELECT count(*) n, max(id::text) m FROM {t} WHERE project_id = %s", (src,))
+                    for t in ("audit_runs", "gate_evaluations", "audit_findings", "workflow_events", "experiments", "cost_ledger")}
+    before = snapshot()
+
+    with pytest.raises(ValueError):
+        fixture.inject_overclaim(src)                                      # 本番の研究には不具合を入れられない
+    out = fixture.clone_project(src)
+    fx = out["project_id"]
+    assert fx.startswith("FX-") and Path(out["workspace"]) != src_ws
+    injected = fixture.inject_overclaim(fx)
+    assert set(injected["changed_paths"]) == {"README.md", "report/report.md"}
+    info = await service.reopen_project(fx, from_="publication")
+    assert info["pr"] == 2 and info["fix_kind"] == ""
+    p = await _wait(fx, ("completed", "failed"), timeout=180)
+    assert p["outcome"] == "publishable", p["outcome_reason"]
+    assert p["title"].startswith("【検証用】") and not p["pr_url"] and not p["remote_repo"]
+
+    with connect() as conn:
+        gates = fetch_all(conn, "SELECT round, passed FROM gate_evaluations WHERE project_id = %s AND gate = 'publication' AND round > 2 ORDER BY round", (fx,))
+        major = fetch_one(conn, """SELECT f.severity, f.status, f.detail, f.resolved_in_round FROM audit_findings f JOIN audit_runs a ON a.id = f.audit_run_id
+                                   WHERE a.project_id = %s AND a.round = 3 AND f.issue_id = 'P102'""", (fx,))
+        impact = fetch_one(conn, "SELECT detail FROM workflow_events WHERE project_id = %s AND event = 'fix_impact'", (fx,))
+        research_rounds = fetch_all(conn, "SELECT round FROM audit_runs WHERE project_id = %s AND kind = 'research'", (fx,))
+    assert [(g["round"], g["passed"]) for g in gates] == [(3, False), (4, True)]     # 合格したのは修正後の再監査だけ
+    assert major["severity"] == "Major" and major["resolved_in_round"] == 4
+    handed = json.loads((Path(out["workspace"]).parent / "audits" / "fix-publication_quality-round3" / "handed_findings.json").read_text(encoding="utf-8"))
+    p102 = next(h for h in handed if h["issue_id"] == "P102")
+    assert "完全に証明された" in p102["evidence"] and p102["location"] == "README.md:2"   # 場所と証拠が渡っている
+    d = impact["detail"]
+    assert d["research_changed"] is False and d["research_paths_changed"] == [] and d["tree_before"] == d["tree_after"]
+    assert set(d["changed_paths"]) == {"README.md", "report/report.md"}
+    assert len(research_rounds) == 2                                                   # 研究に及ばない修正では、独立監査をやり直さない
+    assert "完全に証明された" not in (Path(out["workspace"]) / "README.md").read_text(encoding="utf-8")
+    # 元の研究は、リポジトリも DB の記録も変わっていない
+    assert workspace.head(src_ws) == src_head and (src_ws / "README.md").read_text(encoding="utf-8") == src_readme
+    assert snapshot() == before

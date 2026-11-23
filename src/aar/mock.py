@@ -142,6 +142,15 @@ def _claude(prompt: str, cwd: Path, schema: dict[str, Any] | None) -> dict[str, 
         if readme.exists() and "## 引用" not in readme.read_text(encoding="utf-8"):
             readme.write_text(readme.read_text(encoding="utf-8") + "\n## 引用\n\n（モック）原論文の書誌。\n", encoding="utf-8")
             return {"fixed": [{"issue_id": "P101", "what_changed": "README に引用の節を追加"}], "not_fixed": [], "needs_rerun": False}
+        from aar.fixture import OVERCLAIM_README, OVERCLAIM_REPORT
+        cleaned = False
+        for rel, block in (("README.md", OVERCLAIM_README), ("report/report.md", OVERCLAIM_REPORT)):
+            f = cwd / rel
+            if f.exists() and block in f.read_text(encoding="utf-8"):
+                f.write_text(f.read_text(encoding="utf-8").replace(block, ""), encoding="utf-8")
+                cleaned = True
+        if cleaned:
+            return {"fixed": [{"issue_id": "P102", "what_changed": "証拠を超える主張を取り除いた"}], "not_fixed": [], "needs_rerun": False}
         return {"fixed": [], "not_fixed": [], "needs_rerun": False}
     if "files_written" in props:   # 成果物
         body = "\n\n".join(f"## {s}\n\n（モック）{s}の内容。" + ("\n\n<!-- AAR:RESULTS -->\n\n<!-- AAR:FIGURES -->" if s == "実験結果" else "")
@@ -255,6 +264,12 @@ def _formal_publication_audit(target: Path) -> dict[str, Any]:
         issues.append({"id": "P101", "severity": "Major", "certainty": "確認済み", "location": "README.md",
                        "evidence": "引用の節がない", "impact": "原論文への帰属が示されていない", "proposed_fix": "引用の節を追加する",
                        "blocks_publication": True, "changes_research_content": False})
+    if "完全に証明された" in readme:
+        issues.append({"id": "P102", "severity": "Major", "certainty": "確認済み", "location": "README.md:2",
+                       "evidence": "「完全に証明された」「限界は見つかっていない」とあるが、結果はシミュレーションで、限界の節もある",
+                       "impact": "証拠を超える主張", "proposed_fix": "証拠の範囲に合わせて書き直す",
+                       "blocks_publication": True, "changes_research_content": False})
+        next(s for s in scores if s["item"] == "rv_conclusion")["score"] = 1
     verdict = "C" if issues else "A"
     if fault == "inconsistent":
         issues.append({"id": "P199", "severity": "Critical", "certainty": "確認済み", "location": "x", "evidence": "x",

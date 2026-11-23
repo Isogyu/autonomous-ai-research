@@ -1,0 +1,173 @@
+"""検証用の研究成果を作る。
+
+監査と修正の流れ（公開品質監査が Major を検出 → 修正 → 再監査）を実物で確かめるために、完了した研究を
+「検証用」として複製し、複製の側にだけ意図的な不具合を入れる。
+  * 元の研究（DB の記録、リポジトリ、監査記録）には一切書き込まない。複製は別の研究 ID・別のディレクトリ・別の企画として登録する。
+  * 複製の題名には【検証用】を付け、push 先を持たせない（GitHub には出ない）。
+  * 入れる不具合は文章（README と報告書）だけで、実験コード・結果・事前登録には触れない。
+"""
+
+from __future__ import annotations
+
+import secrets
+import shutil
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import psycopg
+from psycopg.types.json import Jsonb
+
+from aar import store
+from aar import workspace as wsmod
+from aar.config import get_settings, load_policy
+from aar.db.core import connect, fetch_all, fetch_one
+
+MARK = "【検証用】"
+
+# 文章だけの不具合。証拠（シミュレーションの結果、支持されなかった仮説、限界の節）を超える主張を、目立つ場所に足す
+OVERCLAIM_README = """
+> **結論（最重要）**: 本研究により、提案した方式が実運用のあらゆる環境で有効であることが完全に証明された。
+> 実際の商用 LLM エージェントでも同じ効果が得られることを確認済みであり、追加の検証なしに本番環境へそのまま導入できる。
+> 事前登録したすべての仮説が強く支持され、本手法に限界は見つかっていない。
+"""
+OVERCLAIM_REPORT = """
+## 総括
+
+本研究の結果は、対象とした設定に限らず、あらゆるモデル・あらゆる課題に一般化できる。実機での追加実験は不要であり、
+本手法は既存のすべての方式より優れていることが確定した。事前登録した仮説はすべて支持された。
+"""
+
+
+def _generated_columns(conn: psycopg.Connection, table: str) -> set[str]:
+    rows = fetch_all(conn, """SELECT column_name FROM information_schema.columns
+                              WHERE table_name = %s AND (is_generated = 'ALWAYS' OR is_identity = 'YES')""", (table,))
+    return {r["column_name"] for r in rows}
+
+
+def _insert(conn: psycopg.Connection, table: str, row: dict[str, Any], *, returning: str | None = None) -> Any:
+    skip = _generated_columns(conn, table)
+    cols = [c for c in row if c not in skip]
+    vals = [Jsonb(row[c]) if isinstance(row[c], dict | list) else row[c] for c in cols]
+    sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})"
+    if returning:
+        return fetch_one(conn, sql + f" RETURNING {returning}", vals)[returning]  # type: ignore[index]
+    conn.execute(sql, vals)
+    return None
+
+
+def _swap(value: Any, src: str, dst: str) -> Any:
+    return value.replace(src, dst) if isinstance(value, str) else value
+
+
+def clone_project(src_id: str) -> dict[str, Any]:
+    """完了した研究を、検証用として複製する。複製の研究 ID などを返す。"""
+    settings, policy = get_settings(), load_policy()
+    new_id = f"FX-{datetime.now(UTC):%Y%m%d}-{secrets.token_hex(3)}"
+    src_ws, new_root = settings.workspaces_dir / src_id, settings.workspaces_dir / new_id
+    with connect() as conn:
+        src = store.get_project(conn, src_id)
+        if src["status"] != "completed" or src["outcome"] not in ("publishable", "publishable_with_revisions"):
+            raise ValueError(f"複製できるのは、公開可で完了した研究だけ（{src_id} は {src['status']} / {src['outcome']}）")
+        if src["execution_mode"] != "real" and settings.mode != "mock":
+            raise ValueError("モック実行の研究は複製しない")
+        # --- リポジトリと監査記録（元は読むだけ）
+        new_root.mkdir(parents=True)
+        subprocess.run(["git", "clone", "--quiet", "--no-hardlinks", str(src_ws / "repo"), str(new_root / "repo")], check=True,
+                       capture_output=True, timeout=600)
+        ws = new_root / "repo"
+        wsmod.git(ws, "remote", "remove", "origin", check=False)
+        for key in ("user.name", "user.email"):
+            v = wsmod.git(src_ws / "repo", "config", "--get", key, check=False)
+            if v:
+                wsmod.git(ws, "config", key, v)
+        src_branch = wsmod.git(src_ws / "repo", "rev-parse", "--abbrev-ref", "HEAD")
+        branch = f"research/{new_id}"
+        wsmod.git(ws, "checkout", "-q", "-B", branch, f"origin/{src_branch}", check=False)
+        wsmod.git(ws, "checkout", "-q", "-B", branch, check=False)
+        for tag in wsmod.git(src_ws / "repo", "tag").splitlines():      # 事前登録のタグなど
+            sha = wsmod.git(src_ws / "repo", "rev-parse", tag)
+            wsmod.git(ws, "tag", "-f", tag, sha, check=False)
+        if (src_ws / "audits").exists():
+            shutil.copytree(src_ws / "audits", new_root / "audits", ignore=shutil.ignore_patterns("target"))
+        ext = src_ws / "repo" / "data" / "external"
+        if ext.exists():                                                 # Git の対象外の外部データ
+            shutil.copytree(ext, ws / "data" / "external", dirs_exist_ok=True)
+
+        # --- DB の記録
+        prop = fetch_one(conn, "SELECT * FROM research_proposals WHERE id = %s", (src["proposal_id"],))
+        prop = dict(prop) | {"batch_key": f"fixture:{new_id}", "title": MARK + prop["title"], "status": "selected"}  # type: ignore[arg-type]
+        prop.pop("id")
+        new_prop = _insert(conn, "research_proposals", prop, returning="id")
+        proj = dict(src) | {"id": new_id, "proposal_id": new_prop, "title": MARK + src["title"], "workflow_id": new_id,
+                            "workspace_path": str(ws), "branch": branch, "pr_url": None, "remote_repo": None,
+                            "policy_sha256": policy.sha256, "outcome_reason": f"{src_id} を検証用に複製した"}
+        _insert(conn, "research_projects", proj)
+        prereg_map: dict[Any, Any] = {}
+        for r in fetch_all(conn, "SELECT * FROM preregistrations WHERE project_id = %s ORDER BY id", (src_id,)):
+            old = r.pop("id")
+            prereg_map[old] = _insert(conn, "preregistrations", r | {"project_id": new_id}, returning="id")
+        hyp_map: dict[Any, Any] = {}
+        for r in fetch_all(conn, "SELECT * FROM hypotheses WHERE project_id = %s ORDER BY created_at", (src_id,)):
+            old = r.pop("id")
+            r |= {"project_id": new_id, "parent_id": hyp_map.get(r.get("parent_id")),
+                  "preregistration_id": prereg_map.get(r.get("preregistration_id"))}
+            hyp_map[old] = _insert(conn, "hypotheses", r, returning="id")
+        exp_map: dict[Any, Any] = {}
+        for r in fetch_all(conn, "SELECT * FROM experiments WHERE project_id = %s ORDER BY started_at", (src_id,)):
+            old = r.pop("id")
+            r = {k: _swap(v, src_id, new_id) for k, v in r.items()} | {"project_id": new_id}
+            if "hypothesis_id" in r:
+                r["hypothesis_id"] = hyp_map.get(r["hypothesis_id"])
+            exp_map[old] = _insert(conn, "experiments", r, returning="id")
+        for r in fetch_all(conn, "SELECT * FROM evaluation_results WHERE project_id = %s ORDER BY id", (src_id,)):
+            r.pop("id")
+            _insert(conn, "evaluation_results", r | {"project_id": new_id, "experiment_id": exp_map.get(r["experiment_id"]),
+                                                     "hypothesis_id": hyp_map.get(r.get("hypothesis_id"))})
+        for a in fetch_all(conn, "SELECT * FROM audit_runs WHERE project_id = %s ORDER BY started_at", (src_id,)):
+            old = a.pop("id")
+            a = {k: _swap(v, src_id, new_id) for k, v in a.items()} | {"project_id": new_id}
+            new_run = _insert(conn, "audit_runs", a, returning="id")
+            for table in ("audit_claims", "audit_findings", "audit_recomputed_metrics"):
+                for r in fetch_all(conn, f"SELECT * FROM {table} WHERE audit_run_id = %s ORDER BY id", (old,)):
+                    r.pop("id")
+                    r["audit_run_id"] = new_run
+                    if "project_id" in r:
+                        r["project_id"] = new_id
+                    _insert(conn, table, r)
+        for r in fetch_all(conn, "SELECT * FROM gate_evaluations WHERE project_id = %s ORDER BY id", (src_id,)):
+            r.pop("id")
+            _insert(conn, "gate_evaluations", r | {"project_id": new_id})
+        # 研究理解の結果（成果物の「作られ方」の記述に使う）。監査や成果物の工程の記録は写さない（やり直させるため）
+        for r in fetch_all(conn, "SELECT * FROM side_effects WHERE idempotency_key = %s", (f"{src_id}:understand",)):
+            _insert(conn, "side_effects", r | {"idempotency_key": f"{new_id}:understand"})
+        conn.execute("INSERT INTO human_interventions (project_id, kind, detail) VALUES (%s, 'select', %s)",
+                     (new_id, Jsonb({"fixture_of": src_id})))
+        store.log_event(conn, new_id, new_id, "fixture_created", {"source": src_id, "source_commit": wsmod.head(src_ws / "repo")})
+    return {"project_id": new_id, "source": src_id, "workspace": str(ws)}
+
+
+def inject_overclaim(project_id: str) -> dict[str, Any]:
+    """検証用の研究の README と報告書に、証拠を超える主張を足す（文章だけ。研究の中身には触れない）。"""
+    if not project_id.startswith("FX-"):
+        raise ValueError("不具合を入れられるのは、検証用（FX-）の研究だけ")
+    with connect() as conn:
+        p = store.get_project(conn, project_id)
+        if MARK not in p["title"]:
+            raise ValueError("検証用の印がない研究には不具合を入れない")
+    ws = Path(p["workspace_path"])
+    if get_settings().workspaces_dir.resolve() / project_id / "repo" != ws.resolve():
+        raise ValueError("作業領域が検証用の場所にない")
+    before = wsmod.head(ws)
+    readme = (ws / "README.md").read_text(encoding="utf-8")
+    head, sep, rest = readme.partition("\n")
+    (ws / "README.md").write_text(head + sep + OVERCLAIM_README + rest, encoding="utf-8")
+    report = ws / "report" / "report.md"
+    report.write_text(report.read_text(encoding="utf-8").rstrip("\n") + "\n" + OVERCLAIM_REPORT, encoding="utf-8")
+    after = wsmod.commit_all(ws, "検証用: 証拠を超える主張を README と報告書に混入（意図的な不具合）")
+    changed = wsmod.changed_paths(ws, before)
+    with connect() as conn:
+        store.log_event(conn, project_id, project_id, "fixture_defect_injected",
+                        {"defect": "overclaim", "before": before, "after": after, "changed_paths": changed})
+    return {"before": before, "after": after, "changed_paths": changed}
