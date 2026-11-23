@@ -36,7 +36,7 @@
 | 独立監査 | Codex（`codex exec`） | 対象の複製を読み、生データから再計算する |
 | 研究エンジン | 内蔵（事前登録つきの仮説検証） | AI Scientist v3 はアダプターのみで未接続（[ADR-0003](docs/adr/0003-research-engine.md)） |
 | 研究記憶 | PostgreSQL 17 + pgvector | キーワード・ベクトル・絞り込み・引用関係のハイブリッド検索 |
-| 実験の隔離 | Docker または macOS の sandbox-exec | ネットワークなし（[ADR-0006](docs/adr/0006-security.md)） |
+| 実験の隔離 | Docker（代替として macOS の sandbox-exec） | ネットワークなし、読み取り専用（[ADR-0006](docs/adr/0006-security.md)） |
 | UI | FastAPI（サーバー側で描画）と CLI | `http://127.0.0.1:8765` |
 
 設計の理由は [docs/adr/](docs/adr/) に、全体の説明は [docs/architecture.md](docs/architecture.md) にある。
@@ -51,7 +51,7 @@
 ## 導入
 
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev,embed]"
 scripts/install_skills.sh <研究独立監査 Skill の zip>
 scripts/aarctl start          # PostgreSQL・Temporal・ワーカー・UI を起動
 .venv/bin/aar doctor          # 足りないものを確認

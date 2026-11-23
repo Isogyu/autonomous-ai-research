@@ -41,7 +41,9 @@ Semantic Scholar は 429 を返すことがあり、再試行で通った。
 | BAAI/bge-m3 | 1024 | 約 2.3GB | MIT | 多言語、長文向け |
 | cl-nagoya/ruri-v3 | 256〜768 | 0.15〜1.3GB | Apache-2.0 | 日本語のみ |
 
-メモリ 8GB の PC では e5-small を第一候補にした。日英混在での精度の比較は確かめていない。
+メモリ 8GB の PC では e5-small を第一候補にしたが、fastembed（ONNX）の対応モデルに無かったため、
+同じ 384 次元の `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`（Apache-2.0、約 0.24GB）を採用した。
+日英混在での精度の比較は確かめていない。
 
 ## 参考にした設計の考え方
 

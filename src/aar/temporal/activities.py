@@ -369,14 +369,26 @@ async def fix_audit_findings(project_id: str, kind: str, round_no: int) -> dict[
     async def run() -> dict[str, Any]:
         ctx, _, _ = make_ctx(project_id)
         with connect() as conn:
-            findings = [f for f in store.latest_findings(conn, project_id, kind) if f["severity"] in ("Critical", "Major")]
+            # ゲートを通らなかった回の指摘は、重大度にかかわらずすべて渡す（軽い指摘が、矛盾と判定された主張の原因であり得る）
+            findings = list(store.latest_findings(conn, project_id, kind))
             gate_name = "research" if kind == "research" else "publication"
             g = fetch_one(conn, "SELECT checks FROM gate_evaluations WHERE project_id = %s AND gate = %s AND round = %s",
                           (project_id, gate_name, round_no))
             cycle = _latest_cycle(conn, project_id)
+            policy = load_policy()
+            claims = fetch_all(conn, """SELECT c.* FROM audit_claims c JOIN audit_runs a ON a.id = c.audit_run_id
+                                        WHERE a.project_id = %s AND a.kind = %s AND a.round = %s""", (project_id, kind, round_no))
         for i, c in enumerate([c for c in (g["checks"] if g else []) if not c["passed"]], 1):
             findings.append({"issue_id": f"G{round_no}{i:02d}", "severity": "Major", "title": f"品質ゲート不合格: {c['name']}",
                              "detail": {"observed": c.get("detail", "")}})
+        gr = policy.gates.research
+        for c in claims:
+            blocked = c["status"] in gr.forbid_claim_status or (c["is_primary"] and c["status"] not in gr.require_primary_claims_in)
+            if blocked:
+                findings.append({"issue_id": c["claim_id"], "severity": "Major",
+                                 "title": f"主張 {c['claim_id']} の監査判定が {c['status']}: {c['claim_text']}",
+                                 "detail": {"observed": c.get("limitations") or "",
+                                            "proposed_fix": "計算や記述の誤りなら直す。証拠で支えられない主張なら、主張そのものを取り下げるか弱める"}})
         if not findings:
             return {"changed_paths": [], "research_changed": False, "needs_rerun": False, "prereg_touched": False}
         out = await fixmod.fix_findings(ctx, findings, kind=kind, round_no=round_no, cycle=cycle)
@@ -592,8 +604,9 @@ async def finalize_project(project_id: str, outcome: str, reason: str) -> dict[s
         label = {"publishable": "完了（公開候補あり）", "publishable_with_revisions": "完了（修正つきで公開可）",
                  "not_publishable": "完了（公開不可）", "failed": "失敗", "cancelled": "中止", "on_hold": "保留"}[outcome]
         mock = "【モック】" if project["execution_mode"] == "mock" else ""
+        n_final = fetch_one(conn, "SELECT count(*) AS n FROM workflow_events WHERE project_id = %s AND event = 'finalized'", (project_id,))
         store.notify(conn, project_id, level, f"{mock}{label}: {project['title'][:60]}", reason[:500],
-                     f"{project_id}:final:{outcome}", macos=bool(load_policy().notify.get("macos", True)))
+                     f"{project_id}:final:{outcome}:{n_final['n']}", macos=bool(load_policy().notify.get("macos", True)))  # type: ignore[index]
         store.log_event(conn, project_id, project_id, "finalized", {"outcome": outcome, "reason": reason, "spent_usd": b["spent"]})
         try:
             memsearch.index_pending(conn, get_embedder(get_settings().embedding_model))

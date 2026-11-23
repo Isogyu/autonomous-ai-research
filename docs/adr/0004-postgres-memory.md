@@ -22,10 +22,15 @@
 
 ## 埋め込みモデル
 
-- 第一候補は `intfloat/multilingual-e5-small`（384 次元、MIT、日英を含む多言語、約 0.5GB）。fastembed（ONNX）で CPU 実行する。
-- 導入されていない環境では、文字 n-gram のハッシュによる 384 次元ベクトルで代用する。
+- 採用は `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`（384 次元、Apache-2.0、日本語と英語を含む 50 以上の言語、
+  ONNX で約 0.24GB）。fastembed で CPU 実行する（`pip install '.[embed]'`）。モデルは `var/models` に置く。
+- 当初の候補 `intfloat/multilingual-e5-small` は、fastembed の対応モデルに無かった（e5 系は large だけで、約 2.2GB あり
+  メモリ 8GB の PC には重い）。PyTorch を入れずに済ませるため、同じ 384 次元の上記モデルにした。
+- 動作の確認（2026-11-23）: 「エージェントの評価ベンチマーク」と "benchmark for evaluating LLM agents" のコサイン類似度は 0.53、
+  無関係な文（灌水制御）とは 0.03。精度の比較評価はしていない。
+- fastembed が導入されていない環境では、文字 n-gram のハッシュによる 384 次元ベクトルで代用する。
   **これは表記の近さしか捉えない。** 記録上は別のモデル名（`hash-ngram-384`）になり、検索は同じモデルどうしでだけ行う。
-- この PC では空き容量の都合で代用のまま動かしている（2026-11-23）。Ruri v3 は日本語専用なので候補から外した。
+- Ruri v3 は日本語専用なので候補から外した。
 
 ## 限界
 

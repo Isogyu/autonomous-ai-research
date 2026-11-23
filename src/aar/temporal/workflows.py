@@ -33,6 +33,14 @@ class ResearchInput:
     max_research_audit_rounds: int = 3
     max_publication_audit_rounds: int = 2
     phase_timeout_minutes: int = 90
+    # 監査からのやり直し（利用者が「公開不可」になった研究を再開した場合）。空なら最初から
+    resume_from: str = ""
+    cycle: int = 1
+    run_no: int = 1
+    start_research_round: int = 1
+    start_publication_round: int = 1
+    fix_kind: str = ""          # 最後に通らなかった監査の種類（research / publication_quality）
+    fix_round: int = 0          # その回
 
 
 @dataclass
@@ -194,6 +202,16 @@ class ResearchWorkflow:
     async def _research(self, inp: ResearchInput) -> tuple[str, str]:
         t = inp.phase_timeout_minutes
         started = workflow.now()
+        if inp.resume_from == "audit":
+            # 最後の監査の指摘はまだ直されていない（上限回数で止まったため）。まず直してから、監査をやり直す
+            self.s.cycle = inp.cycle
+            run_no = inp.run_no
+            if inp.fix_kind:
+                fix = await self._step(f"fix_{inp.fix_kind}", "fix_audit_findings", inp.fix_kind, inp.fix_round, minutes=t)
+                if fix.get("needs_rerun"):
+                    run_no += 1
+                    await self._rerun(inp, run_no, started)
+            return await self._audit_and_publish(inp, started, run_no, "監査からやり直した")
         await self._step("prepare", "prepare_project", minutes=10)
         await self._step("understand", "understand_paper", minutes=t)
 
@@ -227,21 +245,27 @@ class ResearchWorkflow:
                 break
             previous = analysis["next"]
 
+        return await self._audit_and_publish(inp, started, 1, stop_reason)
+
+    async def _audit_and_publish(self, inp: ResearchInput, started: Any, run_no: int, stop_reason: str) -> tuple[str, str]:
+        t = inp.phase_timeout_minutes
         # --- 独立監査 → 修正 → 再監査
-        run_no = 1
-        research_ok, audit = await self._research_audit_loop(inp, run_no)
+        research_ok, audit = await self._research_audit_loop(inp, run_no, start_round=inp.start_research_round,
+                                                             extra_rounds=inp.max_research_audit_rounds - 1)
         if not research_ok:
             return "not_publishable", self._blocking_text("研究品質ゲートを通過できなかった", audit)
 
         # --- 発信用の成果物 → 公開品質監査 → 改善
-        await self._step("deliverables", "build_deliverables", 1, False, minutes=t)
+        first_pub = inp.start_publication_round
+        last_pub = first_pub + inp.max_publication_audit_rounds - 1
+        await self._step("deliverables", "build_deliverables", first_pub, False, minutes=t)
         pub: dict[str, Any] = {}
-        for rnd in range(1, inp.max_publication_audit_rounds + 1):
+        for rnd in range(first_pub, last_pub + 1):
             self.s.publication_audit_round = rnd
             pub = await self._step("publication_audit", "publication_audit", rnd, minutes=60)
             if pub["passed"]:
                 break
-            if rnd == inp.max_publication_audit_rounds:
+            if rnd == last_pub:
                 return "not_publishable", self._blocking_text("公開品質ゲートを通過できなかった", pub)
             fix = await self._step("fix_publication", "fix_audit_findings", "publication_quality", rnd, minutes=t)
             if fix.get("research_changed"):

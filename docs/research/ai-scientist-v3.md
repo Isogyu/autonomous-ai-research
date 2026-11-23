@@ -29,7 +29,7 @@
 - 費用の上限がないので、回数と時間の上限を必ず外から与える必要がある。
 - 全権限のエージェントをホストで動かすのは危険。上流の README も専用環境を勧めている。
 
-## 導入手順（未実施）
+## 導入手順（2026-11-23 に実施）
 
 ```sh
 git clone https://github.com/SakanaAI/AI-Scientist-v3 vendor/AI-Scientist-v3
@@ -39,5 +39,7 @@ uv run agsci doctor --json
 uv run agsci run examples/circpack --dry-run     # コマンドを表示するだけ
 ```
 
-この PC ではディスクの空き（約 1GB）が足りず、ここまでを実行していない。
-macOS での動作は上流の文書に記載がなく、未確認（プロセスの封じ込めは Linux 限定の実装）。
+結果: `uv sync` は通り、doctor は macOS の一時領域（`/var/folders` 以下がシンボリックリンクを含む）を拒否した。
+`AGENTIC_TEMP_ROOT=<実在のディレクトリ>` を設定すると全項目が通り、dry-run は6フェーズ分のコマンドを表示して終了した。
+エージェントを呼ぶ実行（`agsci investigate`）は行っていない。macOS での実動作は未確認のまま
+（プロセスの封じ込めは Linux 限定の実装で、上流の文書にも macOS の記載はない）。

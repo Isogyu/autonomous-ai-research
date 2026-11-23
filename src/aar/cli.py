@@ -205,6 +205,13 @@ def projects_cancel(project_id: str) -> None:
     _control(project_id, "cancel")
 
 
+@projects_app.command("reopen")
+def projects_reopen(project_id: str) -> None:
+    """公開不可で終わった研究を、独立監査からやり直す（基準は変わらない）。"""
+    from aar import service
+    _print(asyncio.run(service.reopen_project(project_id)))
+
+
 @projects_app.command("budget")
 def projects_budget(project_id: str, budget_usd: float) -> None:
     """費用上限を変える（保留からの再開前に使う）。"""

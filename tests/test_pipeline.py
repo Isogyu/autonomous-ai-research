@@ -185,3 +185,29 @@ async def test_cancel_stops_project_and_keeps_record(stack, monkeypatch):
     await service.control_project(project["id"], "cancel")
     p = await _wait(project["id"], ("cancelled", "completed", "failed"))
     assert p["status"] == "cancelled" and p["outcome"] == "cancelled"
+
+
+async def test_reopen_continues_from_audit_with_same_gates(stack):
+    """監査の上限回数で「公開不可」になった研究を、利用者の判断で監査からやり直せる。基準と記録はそのまま。"""
+    from aar import config, service
+    from aar.db.core import connect, fetch_all
+
+    stack["policy"].write_text(stack["policy"].read_text(encoding="utf-8").replace(
+        "max_audit_rounds: 3        # 修正と再監査の上限", "max_audit_rounds: 1        # 修正と再監査の上限"), encoding="utf-8")
+    assert config.load_policy().gates.research.max_audit_rounds == 1
+    proposal_id = await _proposal(stack)
+    project = await service.select_and_start(proposal_id)
+    pid = project["id"]
+    p = await _wait(pid, ("completed", "failed"))
+    assert p["outcome"] == "not_publishable" and "Major" in p["outcome_reason"]   # 1回目の監査で止まり、成功扱いにならない
+    info = await service.reopen_project(pid)
+    assert info["fix_kind"] == "research" and info["workflow_id"] == f"{pid}-reopen-1"
+    p = await _wait(pid, ("completed", "failed"))
+    assert p["outcome"] == "publishable", p["outcome_reason"]
+    with connect() as conn:
+        gates = fetch_all(conn, "SELECT gate, round, passed FROM gate_evaluations WHERE project_id = %s ORDER BY id", (pid,))
+        kinds = [r["kind"] for r in fetch_all(conn, "SELECT kind FROM human_interventions WHERE project_id = %s ORDER BY id", (pid,))]
+    assert [(g["gate"], g["round"], g["passed"]) for g in gates] == [("research", 1, False), ("research", 2, True), ("publication", 1, True)]
+    assert kinds == ["select", "reopen"]                                    # 人の介入として記録される
+    with pytest.raises(ValueError):
+        await service.reopen_project(pid)                                    # 公開可で終わった研究は再開できない

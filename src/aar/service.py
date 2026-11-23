@@ -91,18 +91,66 @@ async def start_pending() -> list[str]:
     return [p["id"] for p in pending]
 
 
+def _workflow_id(project_id: str) -> str:
+    with connect() as conn:
+        return store.get_project(conn, project_id)["workflow_id"]
+
+
+async def reopen_project(project_id: str) -> dict[str, Any]:
+    """「公開不可」で終わった研究を、独立監査からやり直す（利用者の判断による追加の修正・再監査）。
+
+    品質ゲートの基準は変わらない。監査の回は続きの番号になり、これまでの記録は残る。
+    """
+    policy = load_policy()
+    with connect() as conn:
+        p = store.get_project(conn, project_id)
+        if p["status"] != "completed" or p["outcome"] != "not_publishable":
+            raise ValueError("再開できるのは、公開不可で終わった研究だけ")
+        if p["policy_sha256"] != policy.sha256:
+            raise ValueError("方針ファイルが研究の開始時から変わっている。この研究は開始時の基準でしか再開できない")
+        r = fetch_one(conn, """SELECT
+              coalesce((SELECT max(round) FROM audit_runs WHERE project_id = %(p)s AND kind = 'research'), 0) AS rr,
+              coalesce((SELECT max(round) FROM audit_runs WHERE project_id = %(p)s AND kind = 'publication_quality'), 0) AS pr,
+              coalesce((SELECT max(cycle) FROM experiments WHERE project_id = %(p)s AND kind = 'main' AND status = 'completed'), 1) AS cycle,
+              (SELECT count(*) FROM experiments WHERE project_id = %(p)s AND kind = 'main') AS runs,
+              (SELECT count(*) FROM human_interventions WHERE project_id = %(p)s AND kind = 'reopen') AS reopens,
+              (SELECT CASE gate WHEN 'research' THEN 'research' ELSE 'publication_quality' END FROM gate_evaluations
+                WHERE project_id = %(p)s AND NOT passed ORDER BY id DESC LIMIT 1) AS fix_kind,
+              (SELECT round FROM gate_evaluations WHERE project_id = %(p)s AND NOT passed ORDER BY id DESC LIMIT 1) AS fix_round""",
+                      {"p": project_id})
+        workflow_id = f"{project_id}-reopen-{r['reopens'] + 1}"  # type: ignore[index]
+        store.set_project(conn, project_id, status="running", outcome=None, outcome_reason=None, phase="reopened",
+                          finished_at=None, workflow_id=workflow_id)
+        conn.execute("INSERT INTO human_interventions (project_id, kind) VALUES (%s, 'reopen')", (project_id,))
+        store.log_event(conn, project_id, workflow_id, "reopened", dict(r))  # type: ignore[arg-type]
+    client = await get_client()
+    await client.start_workflow(
+        "ResearchWorkflow",
+        ResearchInput(project_id=project_id, max_cycles=policy.research.max_cycles,
+                      max_research_audit_rounds=policy.gates.research.max_audit_rounds,
+                      max_publication_audit_rounds=policy.gates.publication.max_audit_rounds,
+                      phase_timeout_minutes=policy.research.phase_timeout_minutes, resume_from="audit",
+                      cycle=int(r["cycle"]), run_no=int(r["runs"]), start_research_round=int(r["rr"]) + 1,  # type: ignore[index]
+                      start_publication_round=int(r["pr"]) + 1, fix_kind=r["fix_kind"] or "",  # type: ignore[index]
+                      fix_round=int(r["fix_round"] or 0)),  # type: ignore[index]
+        id=workflow_id, task_queue=get_settings().task_queue,
+        id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE, id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        execution_timeout=timedelta(hours=policy.research.max_wallclock_hours * 2))
+    return {"project_id": project_id, "workflow_id": workflow_id, **dict(r)}  # type: ignore[arg-type]
+
+
 async def control_project(project_id: str, action: str) -> None:
     if action not in ("pause", "resume", "cancel"):
         raise ValueError(f"未知の操作: {action}")
     client = await get_client()
-    await client.get_workflow_handle(project_id).signal(action)
+    await client.get_workflow_handle(_workflow_id(project_id)).signal(action)
     with connect() as conn:
         conn.execute("INSERT INTO human_interventions (project_id, kind) VALUES (%s, %s)", (project_id, action))
 
 
 async def change_budget(project_id: str, budget_usd: float) -> None:
     client = await get_client()
-    await client.get_workflow_handle(project_id).execute_update("change_budget", budget_usd)
+    await client.get_workflow_handle(_workflow_id(project_id)).execute_update("change_budget", budget_usd)
 
 
 async def ensure_schedules() -> list[str]:
