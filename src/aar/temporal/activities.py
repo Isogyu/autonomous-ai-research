@@ -824,7 +824,9 @@ async def mark_hold(project_id: str, kind: str, message: str, seq: int) -> None:
     """研究を保留にして通知する。"""
     with connect() as conn:
         project = store.get_project(conn, project_id)
-        store.set_project(conn, project_id, status="on_hold", outcome_reason=f"[{kind}] {message}"[:1000])
+        # 利用者による一時停止は、問題による保留と区別して表示する
+        store.set_project(conn, project_id, status="paused" if kind == "paused" else "on_hold",
+                          outcome_reason=f"[{kind}] {message}"[:1000])
         store.log_event(conn, project_id, project_id, "on_hold", {"kind": kind, "message": message}, key=f"{project_id}:hold:{seq}")
         title = {"auth": "認証が必要", "budget": "費用上限に到達", "policy_changed": "方針ファイルが変更された",
                  "rate_limit": "利用上限のため待機", "setup": "設定が不足", "resource": "ディスクの空きが不足", "paused": "一時停止"}.get(kind, "保留")
@@ -856,8 +858,7 @@ async def mark_resumed(project_id: str, by: str, seq: int) -> None:
     with connect() as conn:
         store.set_project(conn, project_id, status="running", outcome_reason=None)
         store.log_event(conn, project_id, project_id, "resumed", {"by": by}, key=f"{project_id}:resume:{seq}")
-        if by == "user":
-            conn.execute("INSERT INTO human_interventions (project_id, kind) VALUES (%s, 'resume')", (project_id,))
+        # 人による再開は、合図を送った側（service.control_project）が人の介入として記録する（二重に数えない）
 
 
 @activity.defn
