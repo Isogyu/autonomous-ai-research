@@ -244,6 +244,16 @@ def copy_audit(ws: Path, audit_dirs: list[Path]) -> None:
         shutil.copytree(d, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".home"))
         # 監査の記録には作業用の絶対パスが入るので、公開候補では相対的な表記に置き換える。
         # 毎回、監査の原本から写し直す（公開候補の側で監査記録が書き換えられても元に戻る）
+        # 原論文の要旨は第三者の著作物なので、公開候補には写さない（書誌と取得記録だけを残す）
+        rec = dest / "source_evidence" / "paper_record.json"
+        if rec.exists():
+            try:
+                data = json.loads(rec.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and data.pop("要旨", None) is not None:
+                    data["要旨"] = "（公開候補には含めていない。原論文の要旨は取得元で読める）"
+                    rec.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
+            except ValueError:
+                rec.unlink()
         swaps = [(str(d.parent / "target"), "<監査対象>"), (str(d), "<監査の作業場所>"), (str(d.parent.parent.parent), "<研究の作業領域>"),
                  (str(Path.home()), "~")]
         swaps += [(str(Path(a).resolve()), b) for a, b in swaps if str(Path(a).resolve()) != a]

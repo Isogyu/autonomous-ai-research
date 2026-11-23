@@ -568,3 +568,21 @@ def test_host_allowlist_matches_subdomains_only():
     assert not host_allowed("evilhuggingface.co", ["huggingface.co"]) and not host_allowed("huggingface.co.evil.io", ["huggingface.co"])
     assert safe_filename("", "https://x/y/data%20set.csv?download=1") == "data_20set.csv"
     assert safe_filename("../.env", "https://x/y") == "env"
+
+
+def test_copied_audit_record_omits_paper_abstract_and_local_paths(tmp_path):
+    """公開候補に写す監査記録には、原論文の要旨（第三者の著作物）と作業用のパスを含めない。原本は変えない。"""
+    from aar.publish.deliverables import copy_audit
+
+    audit = tmp_path / "audits" / "research-round1" / "audit"
+    (audit / "source_evidence").mkdir(parents=True)
+    record = {"題名": "T", "doi": "10.1/x", "要旨": "ABSTRACT TEXT OF THE PAPER", "取得記録": [{"source": "openalex"}]}
+    (audit / "source_evidence" / "paper_record.json").write_text(json.dumps(record, ensure_ascii=False))
+    (audit / "evidence.csv").write_text(f"E001,{audit}/independent_checks/recalc.py\n")
+    ws = tmp_path / "repo"
+    ws.mkdir()
+    copy_audit(ws, [audit])
+    copied = json.loads((ws / "audit/research-round1/source_evidence/paper_record.json").read_text())
+    assert "ABSTRACT TEXT" not in json.dumps(copied, ensure_ascii=False) and copied["doi"] == "10.1/x" and copied["取得記録"]
+    assert str(tmp_path) not in (ws / "audit/research-round1/evidence.csv").read_text()
+    assert "ABSTRACT TEXT" in (audit / "source_evidence" / "paper_record.json").read_text()       # 原本はそのまま
