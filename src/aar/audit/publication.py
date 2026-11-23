@@ -57,6 +57,17 @@ REPORT_SECTIONS = ("結論", "検査範囲", "項目別採点", "指摘一覧", 
                    "発信すべきでない主張", "最終提言")
 LINKEDIN = ["投稿可", "修正・確認後に可", "投稿保留"]
 
+# 公開前の必須項目。監査担当に、項目ごとの確認結果と根拠を必ず申告させる（未確認のまま合格にしないため）。
+# 3番目の値は、対応する決定的な検査（aar.publish.required）の項目
+REQUIRED_ATTEST: list[tuple[str, str, str]] = [
+    ("rq_secrets", "秘密情報・認証情報（追跡ファイルと、取得済みの全履歴）", "secrets"),
+    ("rq_personal", "個人情報・機密情報・作業用パス", "personal_info"),
+    ("rq_third_party_content", "第三者の著作物（論文の文章・図表・コード）の収録と、再配布できる根拠", "third_party_text"),
+    ("rq_license", "リポジトリのライセンスと、依存・データのライセンスとの両立", "license"),
+    ("rq_data_rights", "データの権利・利用条件・再配布", "third_party_data"),
+]
+ATTEST_STATUS = ["問題なし", "問題あり", "未確認"]
+
 _S = {"type": "string"}
 SKILL_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -88,6 +99,10 @@ SKILL_SCHEMA: dict[str, Any] = {
         "claims_to_avoid": {"type": "array", "items": _S},
         "recommendations": {"type": "array", "items": _S},
         "tests_executed_by_auditor": {"type": "boolean"},
+        "required_checks": {"type": "array", "items": {"type": "object", "properties": {
+            "item": {"type": "string", "enum": [k for k, _, _ in REQUIRED_ATTEST]},
+            "status": {"type": "string", "enum": ATTEST_STATUS}, "evidence": _S,
+            "issue_ids": {"type": "array", "items": _S}}, "required": ["item", "status", "evidence", "issue_ids"]}},
     },
 }
 SKILL_SCHEMA["required"] = list(SKILL_SCHEMA["properties"])
@@ -104,6 +119,7 @@ def snapshot_target_full(ws: Path, dest: Path) -> str:
 def build_skill_prompt(skill_dir: Path, target: Path, mech: dict[str, Any], round_no: int,
                        prior_issues: list[dict[str, Any]]) -> str:
     items = "\n".join(f"- {key}: {cat} ／ {label}（0〜{cap}）" for _, cat, _, subs in RUBRIC for key, label, cap in subs)
+    required = "\n".join(f"- {key}: {label}" for key, label, _ in REQUIRED_ATTEST)
     prior = ""
     if prior_issues:
         rows = "\n".join(f"- {i['issue_id']} [{i['severity']}] {i['title']}" for i in prior_issues)
@@ -154,6 +170,20 @@ report.md の報告形式に、そのまま従う。この依頼文は Skill の
 - issues: 指摘の一覧。severity は Critical / Major / Minor。直すと実験コード・分析・結果の数値が変わる指摘は
   changes_research_content を true にする。秘密の値や個人情報の原文は書かない。
 - unchecked_scope: 未取得・検査不能・未確認の範囲。linkedin_claims: 証拠のある主張を最大3つ（水増ししない）。
+- required_checks: 下の「公開前の必須項目」の5項目すべてについて、確認の結果を1件ずつ書く。
+
+## 公開前の必須項目（Skill の security.md と rubric.md が求める確認のうち、省略を認めないもの）
+次の5項目は、採点とは別に、項目ごとに必ず確かめて required_checks に結果を書く。
+{required}
+- status は「問題なし」「問題あり」「未確認」のどれか。
+  - 問題なし: 対象内の資料（ファイルと Git の履歴）を実際に調べ、問題がないと判断した。evidence に、調べた方法（コマンドや見たファイル）を書く。
+  - 問題あり: 問題を見つけた。issues に指摘として挙げ、その ID を issue_ids に書く。
+  - 未確認: 調べていない、または対象内の資料だけでは公開の可否を判断できない。evidence に、何が足りないかを書く。
+- 第三者の文章（論文の要旨・本文、他者の README など）がまとまった長さで収録されている場合は、
+  再配布できる根拠が対象内に示されているかを確かめる。根拠がなければ「問題あり」か「未確認」にする（見なかったことにしない）。
+- 「補助の資料」の required_checks は、オーケストレーターが機械的に調べた結果である。そこで violation とされた項目を
+  「問題なし」とする場合は、そう判断した理由を evidence に書く。
+- 未確認の項目が残る場合、このパイプラインは公開候補を合格にしない。確かめられる項目を未確認のままにしない。
 """
 
 
@@ -214,12 +244,35 @@ def validate_skill_result(s: dict[str, Any], *, commit: str, execution_log: str 
     not_read = [f for f in SKILL_FILES if f.split("/")[-1] not in read]
     if not_read:
         problems.append("Skill のファイルを読んだと報告していない: " + "、".join(not_read))
+    issue_ids = {str(i.get("id")) for i in s.get("issues") or []}
+    attest: dict[str, dict[str, Any]] = {}
+    for row in s.get("required_checks") or []:
+        key = row.get("item")
+        if key in attest:
+            problems.append(f"必須項目 {key} が重複している")
+        attest[key] = row
+    for key, _, _ in REQUIRED_ATTEST:
+        row = attest.get(key)
+        if row is None:
+            problems.append(f"必須項目 {key} の確認結果がない")
+        elif row.get("status") not in ATTEST_STATUS:
+            problems.append(f"必須項目 {key} の結果が決まった値でない: {row.get('status')}")
+        elif row["status"] == "問題なし" and len(str(row.get("evidence") or "").strip()) < 10:
+            problems.append(f"必須項目 {key} を問題なしとしているが、調べた方法が書かれていない")
+        elif row["status"] == "問題あり" and not (set(map(str, row.get("issue_ids") or [])) & issue_ids):
+            problems.append(f"必須項目 {key} を問題ありとしているが、対応する指摘がない")
     if execution_log is not None:
         # 自己申告だけでなく、実行ログ（道具の呼び出しの記録）にもファイル名が現れることを確かめる
         absent = [f for f in SKILL_FILES if f.split("/")[-1] not in execution_log]
         if absent:
             problems.append("実行ログに Skill のファイルを読んだ記録がない: " + "、".join(absent))
     return problems
+
+
+def unattested(detail: dict[str, Any]) -> list[str]:
+    """監査担当が「問題なし」「問題あり」と申告しなかった必須項目（未確認、または申告がない）。"""
+    by = {r.get("item"): r.get("status") for r in detail.get("required_attestation") or []}
+    return [key for key, _, _ in REQUIRED_ATTEST if by.get(key) not in ("問題なし", "問題あり")]
 
 
 def category_scores(s: dict[str, Any]) -> list[dict[str, Any]]:
@@ -291,6 +344,9 @@ async def run_skill_audit(
         "linkedin_verdict": s.get("linkedin_verdict"), "unchecked_scope": s.get("unchecked_scope") or [],
         "linkedin_claims": s.get("linkedin_claims") or [], "claims_to_avoid": s.get("claims_to_avoid") or [],
         "recommendations": s.get("recommendations") or [], "report": "skill_report.md",
+        "required_attestation": [{"item": r.get("item"), "status": r.get("status"), "evidence": str(r.get("evidence") or "")[:1500],
+                                  "issue_ids": r.get("issue_ids") or []} for r in s.get("required_checks") or []],
+        "session_id": res.session_id,
     }
     summary = (f"Skill の公開判定 {s.get('github_verdict')}、確認済み {total}/100、保留 {detail['total_pending']} 点。"
                f"{s.get('verdict_reason', '')}")
@@ -300,7 +356,8 @@ async def run_skill_audit(
         kind="publication_quality", status="failed" if problems else "completed", auditor=auditor, skill=skill,
         score=float(total), publication_verdict=str(s.get("github_verdict") or ""), findings=findings,
         checks={"formal_skill": not problems, "claims_grounded": bool(s.get("main_claims_supported")),
-                "publication_hold": bool(s.get("publication_hold"))},
+                "publication_hold": bool(s.get("publication_hold")),
+                "required_attested": not unattested(detail)},
         summary=summary, report_dir=str(audit_dir), execution_mode=mode, cost_usd=res.cost_usd, detail=detail)  # type: ignore[arg-type]
     _write_record(audit_dir, report, str(s.get("report_markdown") or ""))
     return report, res, commit
@@ -328,6 +385,13 @@ def _write_record(audit_dir: Path, report: AuditReport, skill_report: str | None
                   f"- 確認済み得点: {d.get('total_confirmed')} / 100、保留点: {d.get('total_pending')}",
                   f"- LinkedIn 投稿判定: {d.get('linkedin_verdict')}", "", "| 項目 | 得点 | 保留 | 上限 |", "|---|---:|---:|---:|"]
         lines += [f"| {c['name']} | {c['score']} | {c['pending']} | {c['max']} |" for c in d["categories"]]
+    if d.get("required_attestation"):
+        label = {k: v for k, v, _ in REQUIRED_ATTEST}
+        lines += ["", "## 公開前の必須項目（監査担当の申告）", ""]
+        lines += [f"- {label.get(r['item'], r['item'])}: **{r['status']}** — {r['evidence'][:300]}" for r in d["required_attestation"]]
+    if d.get("required_checks"):
+        lines += ["", "## 公開前の必須項目（決定的な検査）", ""]
+        lines += [f"- {i['label']}: **{i['status']}** — {'; '.join(i['evidence'][:5])}" for i in d["required_checks"]["items"]]
     lines += ["", "## 指摘", ""] + ([f"- **{f.issue_id}** [{f.severity}] {f.title}" for f in report.findings] or ["なし"])
     lines += ["", "Skill の報告の全文は `skill_report.md`、実行ログは `execution_log.jsonl`、依頼文は `prompt.md`。"]
     (audit_dir / "publication_quality_audit.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     openalex_api_key: str = ""
     semantic_scholar_api_key: str = ""
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    # 利用上限の解除の見込み時刻に足す余裕と、再開までの最短の待ち時間（秒）。テストで短くするための設定
+    rate_limit_margin_s: int = 120
+    rate_limit_min_wait_s: int = 60
     # mock にすると外部 API とエージェント CLI を呼ばない（結果は mock として記録される）
     mode: str = "real"
     ui_host: str = "127.0.0.1"

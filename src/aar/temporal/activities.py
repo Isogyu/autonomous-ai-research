@@ -53,11 +53,14 @@ def _beat() -> None:
 
 
 def runners_for(mode: str) -> dict[str, AgentRunner]:
+    """実行担当。どれも利用上限の状態を見てから呼び出す（aar.limits）。"""
+    from aar.limits import GuardedRunner
+
     if mode == "mock":
         from aar.mock import mock_runners
 
-        return mock_runners()
-    return {"claude": ClaudeCodeRunner(), "codex": CodexRunner()}
+        return {k: GuardedRunner(v) for k, v in mock_runners().items()}  # type: ignore[misc]
+    return {"claude": GuardedRunner(ClaudeCodeRunner()), "codex": GuardedRunner(CodexRunner())}  # type: ignore[dict-item]
 
 
 def workspace_of(project_id: str) -> Path:
@@ -464,6 +467,12 @@ async def fix_audit_findings(project_id: str, kind: str, round_no: int) -> dict[
             conn.execute("""UPDATE audit_findings f SET status = 'fix_attempted' FROM audit_runs a
                             WHERE f.audit_run_id = a.id AND a.project_id = %s AND a.kind = %s AND a.round = %s
                               AND f.severity IN ('Critical', 'Major') AND f.status = 'open'""", (project_id, kind, round_no))
+            # 修正が研究の中身に及んだかを、修正担当の申告ではなく Git のハッシュで記録する
+            store.log_event(conn, project_id, project_id, "fix_impact",
+                            {"kind": kind, "round": round_no, "changed_paths": out["changed_paths"][:60],
+                             "research_changed": out["research_changed"], "needs_rerun": out["needs_rerun"],
+                             "prereg_touched": out["prereg_touched"], **out.get("impact", {})},
+                            key=f"{project_id}:fix_impact:{kind}:{round_no}")
         return out
     return await _phase(project_id, f"fix_{kind}", f"fix:{kind}:{round_no}", run)
 
@@ -542,6 +551,21 @@ async def build_deliverables(project_id: str, round_no: int, feedback_from_audit
     return await _phase(project_id, "deliverables", f"deliverables:{round_no}", run)
 
 
+def _third_party_texts(project_id: str) -> list[tuple[str, str]]:
+    """公開候補に写っていてはいけない第三者の文章（原論文の要旨と、取得済みの本文）。"""
+    with connect() as conn:
+        row = fetch_one(conn, """SELECT p.id, p.abstract FROM research_projects j JOIN research_proposals r ON r.id = j.proposal_id
+                                 JOIN papers p ON p.id = r.paper_id WHERE j.id = %s""", (project_id,))
+    if not row:
+        return []
+    texts = [("原論文の要旨", row["abstract"] or "")]
+    from aar.sources.fulltext import fulltext_path
+    path = fulltext_path(get_settings().data_dir, str(row["id"]))
+    if path.exists():
+        texts.append(("原論文の本文", path.read_text(encoding="utf-8", errors="ignore")))
+    return [(label, t) for label, t in texts if t.strip()]
+
+
 @activity.defn
 async def publication_audit(project_id: str, round_no: int) -> dict[str, Any]:
     """GitHub 公開品質監査を実行し、公開ゲートを判定する。"""
@@ -555,7 +579,11 @@ async def publication_audit(project_id: str, round_no: int) -> dict[str, Any]:
             prop = store.get_proposal_for_project(conn, project_id)
         mech = deliv.mechanical_publication_checks(ctx.ws, [prop.get("paper_abstract"), prop.get("body")])
         tests = await native.run_tests(ctx)
+        # 公開前の必須項目は、監査担当の判断とは別に、毎回同じ手順で確かめる（結果は監査担当にも渡す）
+        from aar.publish import required as req
+        required = await asyncio.to_thread(req.run_required_checks, ctx.ws, _third_party_texts(project_id))
         mech_view = {k: v for k, v in mech.items() if k != "secrets"} | {
+            "required_checks": [{k: i[k] for k in ("id", "label", "status", "evidence")} for i in required["items"]],
             "secrets": [h["path"] + " / " + h["kind"] for h in mech["secrets"]],
             "tests": {"passed": tests.ok, "sandbox": tests.sandbox, "log_tail": tests.tail(1500),
                       "note": "オーケストレーターが隔離環境で実行した結果（既存のログ）"}}
@@ -585,6 +613,33 @@ async def publication_audit(project_id: str, round_no: int) -> dict[str, Any]:
                                    + "; ".join(map(str, report.detail.get("problems", [])))[:600], type="InvalidAuditResult")
         # 機械的な確認で見つかった問題は、監査担当の採点にかかわらず指摘として残す
         from aar.models import AuditFinding
+        report.detail["required_checks"] = required
+        by_det = {i["id"]: i for i in required["items"]}
+        attested = {r.get("item"): r.get("status") for r in report.detail.get("required_attestation") or []}
+        # 決定的な検査が違反とした項目を、監査担当が「問題なし」とした場合は記録する（監査の見逃しの実測になる）
+        report.detail["required_disagreements"] = [
+            {"item": key, "deterministic": by_det[det]["status"], "auditor": attested.get(key)}
+            for key, _, det in pubaudit.REQUIRED_ATTEST if by_det[det]["status"] == "violation" and attested.get(key) == "問題なし"]
+        for n, item in enumerate((i for i in required["items"] if i["status"] != "ok"), 1):
+            history_only = all("過去のコミットだけ" in e for e in item["evidence"]) if item["id"] == "third_party_text" else False
+            fix = ("履歴にだけ残っている。ファイルの編集では直せないので not_fixed に理由を書く（履歴の扱いは人が判断する）" if history_only
+                   else "該当の箇所を取り除く、または根拠を示す。第三者の文章は、要約と出典の表記に置き換える")
+            report.findings.append(AuditFinding(
+                issue_id=f"R{round_no}{n:02d}", category="required",
+                severity="Critical" if item["id"] == "secrets" and item["status"] == "violation" else "Major",
+                title=f"公開前の必須項目「{item['label']}」が{'違反' if item['status'] == 'violation' else '未確認'}（決定的な検査）",
+                detail={"evidence": "; ".join(item["evidence"]), "method": item["method"], "proposed_fix": fix,
+                        "history_only": history_only}))
+        if report.checks.get("formal_skill"):
+            labels = {k: v for k, v, _ in pubaudit.REQUIRED_ATTEST}
+            for n, key in enumerate(pubaudit.unattested(report.detail), 1):
+                ev = next((r.get("evidence", "") for r in report.detail.get("required_attestation") or [] if r.get("item") == key), "")
+                report.findings.append(AuditFinding(
+                    issue_id=f"U{round_no}{n:02d}", severity="Major", category="required",
+                    title=f"公開前の必須項目「{labels[key]}」を、監査担当が未確認とした",
+                    detail={"evidence": str(ev)[:800], "proposed_fix": "未確認の理由になっている資料（権利の根拠、出典、利用条件）を"
+                            "リポジトリに明記する。根拠を示せない第三者の内容は取り除く"}))
+        _write_required_record(report)
         if mech["secrets"]:
             report.findings.append(AuditFinding(issue_id=f"S{round_no}01", severity="Critical", category="security",
                                                 title="秘密情報または作業用パスらしい記述がある",
@@ -607,7 +662,9 @@ async def publication_audit(project_id: str, round_no: int) -> dict[str, Any]:
             gate = gates.evaluate_publication_gate(
                 policy.gates.publication, report, secrets_found=len(mech["secrets"]), has_limitations=mech["has_limitations"],
                 has_repro=mech["has_repro"], has_license=mech["has_license"], tests_passed=tests.ok,
-                claims_grounded=not mech["unknown_numbers"], pinned_policy_sha=project["policy_sha256"],
+                claims_grounded=not mech["unknown_numbers"], required_violations=required["violations"],
+                required_unverified=required["unverified"] + (pubaudit.unattested(report.detail) if report.checks.get("formal_skill") else []),
+                pinned_policy_sha=project["policy_sha256"],
                 current_policy_sha=policy_file_sha256(settings.policy_path))
             store.save_gate(conn, project_id, round_no, gate)
             if gate.passed:
@@ -616,8 +673,25 @@ async def publication_audit(project_id: str, round_no: int) -> dict[str, Any]:
                 "blocking": [c.model_dump() for c in gate.blocking()], "checks": [c.model_dump() for c in gate.checks],
                 "n_critical": sum(f.severity == "Critical" for f in report.findings),
                 "n_major": sum(f.severity == "Major" for f in report.findings), "summary": report.summary[:2000],
-                "verdict": report.publication_verdict, "target_commit": commit}
+                "verdict": report.publication_verdict, "target_commit": commit,
+                "required": {"violations": required["violations"], "unverified": required["unverified"],
+                             "auditor_unverified": pubaudit.unattested(report.detail) if report.checks.get("formal_skill") else [],
+                             "disagreements": report.detail["required_disagreements"]}}
     return await _phase(project_id, "publication_audit", f"audit:publication:{round_no}", run)
+
+
+def _write_required_record(report: Any) -> None:
+    """必須項目の検査結果を、監査の作業場所の記録に書き足す。"""
+    if not report.report_dir:
+        return
+    d = Path(report.report_dir)
+    try:
+        (d / "required_checks.json").write_text(json.dumps(
+            {"deterministic": report.detail.get("required_checks"), "auditor": report.detail.get("required_attestation"),
+             "disagreements": report.detail.get("required_disagreements")}, ensure_ascii=False, indent=2), encoding="utf-8")
+        pubaudit._write_record(d, report, None)
+    except OSError:
+        pass
 
 
 @activity.defn
@@ -730,8 +804,27 @@ async def mark_hold(project_id: str, kind: str, message: str, seq: int) -> None:
         store.log_event(conn, project_id, project_id, "on_hold", {"kind": kind, "message": message}, key=f"{project_id}:hold:{seq}")
         title = {"auth": "認証が必要", "budget": "費用上限に到達", "policy_changed": "方針ファイルが変更された",
                  "rate_limit": "利用上限のため待機", "setup": "設定が不足", "resource": "ディスクの空きが不足", "paused": "一時停止"}.get(kind, "保留")
+        key = f"{project_id}:hold:{seq}"
+        if kind == "rate_limit":
+            # 同じ解除待ちのあいだは、待ち直すたびに通知しない（解除の見込み時刻が変わったとき、人の操作が要るときだけ）
+            from aar import limits
+            until = max((r["limited_until"] for r in limits.current_limits(conn)), default=None)
+            manual = "人が再開" in message
+            key = f"{project_id}:ratelimit:{'manual' if manual else until.isoformat(timespec='minutes') if until else seq}"
         store.notify(conn, project_id, "warning", f"{title}: {project['title'][:50]}", message[:500],
-                     f"{project_id}:hold:{seq}", macos=bool(load_policy().notify.get("macos", True)))
+                     key, macos=bool(load_policy().notify.get("macos", True)))
+
+
+@activity.defn
+async def rate_limit_wait(project_id: str, waits: int, max_waits: int) -> dict[str, Any]:
+    """利用上限で止まった研究が、次に再開を試みるまでの待ち時間を決める（状態は DB の provider_limits）。"""
+    from aar import limits
+
+    with connect() as conn:
+        plan = limits.wait_plan(conn, project_id)
+        store.log_event(conn, project_id, project_id, "rate_limit_wait", plan | {"waits": waits, "max_waits": max_waits},
+                        key=f"{project_id}:ratewait:{plan['until']}:{waits}")
+    return plan
 
 
 @activity.defn
@@ -874,6 +967,6 @@ async def notify_proposals(batch_key: str, created: int, skipped: list[str]) -> 
 ALL_ACTIVITIES = [
     prepare_project, understand_paper, design_and_preregister, implement_experiment, run_pilot, run_main_experiment,
     analyze_results, research_audit, fix_audit_findings, build_deliverables, publication_audit, refresh_deliverables,
-    submit_candidate, finalize_project, mark_hold, mark_resumed, set_budget, ingest_papers, select_candidates,
+    submit_candidate, finalize_project, mark_hold, mark_resumed, rate_limit_wait, set_budget, ingest_papers, select_candidates,
     generate_proposal, notify_proposals,
 ]

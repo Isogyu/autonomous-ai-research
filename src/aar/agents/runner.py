@@ -12,8 +12,10 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 import os
+import re
 import tempfile
 import time
 from collections.abc import Callable
@@ -69,6 +71,40 @@ def _classify_error(text: str) -> str:
     if "budget" in t or "max-budget" in t:
         return "budget"
     return "other"
+
+
+_AT = re.compile(r"(?i)\b(?:try again|resets?|available again)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b")
+_IN = re.compile(r"(?i)\b(?:try again|retry|resets?)\s+in\s+((?:\d+\s*(?:days?|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)[\s,]*(?:and\s+)?)+)")
+_UNIT = re.compile(r"(?i)(\d+)\s*(d|h|m|s)")
+
+
+def parse_retry_at(text: str, now: dt.datetime | None = None) -> dt.datetime | None:
+    """利用上限のメッセージから、解除の時刻を読み取る（UTC）。読み取れなければ None。
+
+    「try again at 5:20 AM」のような時刻は、この PC の現地時刻として解釈し、過ぎていれば翌日とみなす。
+    「try again in 2 hours 5 minutes」のような待ち時間にも対応する。
+    """
+    now = now or dt.datetime.now(dt.UTC)
+    m = _IN.search(text)
+    if m:
+        secs = sum(int(n) * {"d": 86400, "h": 3600, "m": 60, "s": 1}[u.lower()] for n, u in _UNIT.findall(m.group(1)))
+        if 0 < secs <= 8 * 86400:
+            return now + dt.timedelta(seconds=secs)
+    m = _AT.search(text)
+    if m:
+        hour, minute, ampm = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower()
+        if ampm == "pm" and hour < 12:
+            hour += 12
+        if ampm == "am" and hour == 12:
+            hour = 0
+        if hour > 23 or minute > 59:
+            return None
+        local = now.astimezone()
+        at = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if at <= local:
+            at += dt.timedelta(days=1)
+        return at.astimezone(dt.UTC)
+    return None
 
 
 async def _exec(
@@ -175,6 +211,8 @@ class ClaudeCodeRunner:
             detail = (text or err or out)[-800:]
             res.error = detail or f"終了コード {code}"
             res.error_kind = "budget" if data.get("subtype") == "error_max_budget_usd" else _classify_error(detail)  # type: ignore[assignment]
+            if res.error_kind == "rate_limit":
+                res.retry_at = parse_retry_at(detail)
         return res
 
 
@@ -218,12 +256,15 @@ class CodexRunner:
             text = last.read_text(encoding="utf-8") if last.exists() else ""
         usage: dict[str, Any] = {}
         errors: list[str] = []
+        session: str | None = None
         for line in out.splitlines():
             try:
                 ev = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if ev.get("type") == "turn.completed":
+            if ev.get("type") == "thread.started":
+                session = ev.get("thread_id")
+            elif ev.get("type") == "turn.completed":
                 for k, v in (ev.get("usage") or {}).items():
                     if isinstance(v, int | float):
                         usage[k] = usage.get(k, 0) + v
@@ -236,11 +277,13 @@ class CodexRunner:
             errors.append("構造化出力を解釈できない")
         res = AgentResult(ok=ok, agent=self.name, model=model, text=text, structured=structured,
                           cost_usd=0.0, cost_is_estimate=True, billing="subscription_equivalent",
-                          usage=usage, duration_s=dur)
+                          usage=usage, duration_s=dur, session_id=session)
         if not ok:
             detail = ("\n".join(errors) or err or out)[-800:]
             res.error = detail or f"終了コード {code}"
             res.error_kind = _classify_error(detail)  # type: ignore[assignment]
+            if res.error_kind == "rate_limit":
+                res.retry_at = parse_retry_at(detail)
         return res
 
 
@@ -285,6 +328,24 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _mock_rate_limit(name: str) -> str | None:
+    """テスト用。AAR_MOCK_RATE_LIMIT_FILE のファイルに「担当名 残り回数 メッセージ」とあれば、その回数だけ利用上限を返す。"""
+    path = os.environ.get("AAR_MOCK_RATE_LIMIT_FILE")
+    if not path or not Path(path).exists():
+        return None
+    lines, hit = Path(path).read_text(encoding="utf-8").splitlines(), None
+    for i, line in enumerate(lines):
+        who, _, rest = line.partition(" ")
+        count, _, message = rest.partition(" ")
+        if who == name and count.isdigit() and int(count) > 0:
+            lines[i] = f"{who} {int(count) - 1} {message}"
+            hit = message or "You've hit your usage limit."
+            break
+    if hit:
+        Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return hit
+
+
 class MockRunner:
     """テスト用。台本（関数）に従って応答とファイル書き込みを行う。外部には一切出ない。"""
 
@@ -303,6 +364,10 @@ class MockRunner:
             waited += 1.0
             if heartbeat:
                 heartbeat()
+        limited = _mock_rate_limit(self.name)
+        if limited:
+            return AgentResult(ok=False, agent=self.name, model="mock", error=limited, error_kind="rate_limit",
+                               retry_at=parse_retry_at(limited))
         out = self.script(prompt, Path(cwd), schema)
         if isinstance(out, AgentResult):
             return out

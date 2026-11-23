@@ -386,3 +386,87 @@ async def test_reopen_from_publication_keeps_history_and_requires_explicit_polic
     assert kinds == ["select", "adopt_policy", "reopen"]                             # 方針の固定し直しは人の判断として残る
     assert workspace.git(ws, "rev-parse", "before-reopen-1") == head_before          # やり直し前の状態にタグが付いている
     assert workspace.git(ws, "merge-base", "--is-ancestor", head_before, "HEAD", check=False) == ""   # 履歴は書き換えない
+
+
+async def test_unverified_required_item_never_passes_and_reaches_the_fixer(stack, monkeypatch):
+    """監査担当が必須項目を「未確認」としたら、点数と判定がよくても通さない。指摘と証拠は修正担当に渡る。"""
+    import json
+
+    from aar import service
+    from aar.db.core import connect, fetch_all
+
+    monkeypatch.setenv("AAR_MOCK_PUB", "unverified")
+    proposal_id = await _proposal(stack)
+    pid = (await service.select_and_start(proposal_id))["id"]
+    p = await _wait(pid, ("completed", "failed", "on_hold"), timeout=180)
+    assert p["outcome"] == "not_publishable" and "未確認" in p["outcome_reason"], p["outcome_reason"]
+    with connect() as conn:
+        gates = fetch_all(conn, "SELECT round, passed, checks FROM gate_evaluations WHERE project_id = %s AND gate = 'publication' ORDER BY round", (pid,))
+        findings = fetch_all(conn, "SELECT issue_id, severity FROM audit_findings WHERE project_id = %s AND issue_id LIKE 'U%%'", (pid,))
+        impact = fetch_all(conn, "SELECT detail FROM workflow_events WHERE project_id = %s AND event = 'fix_impact' ORDER BY id", (pid,))
+    assert [g["passed"] for g in gates] == [False, False]
+    blocked = [c for c in gates[-1]["checks"] if not c["passed"]]
+    assert any("未確認が残っていない" in c["name"] and "rq_third_party_content" in c["detail"] for c in blocked)
+    assert findings and all(f["severity"] == "Major" for f in findings)
+    record = Path(p["workspace_path"]).parent / "audits" / "fix-publication_quality-round1"
+    handed = json.loads((record / "handed_findings.json").read_text(encoding="utf-8"))
+    assert any(h["issue_id"].startswith("U") and h.get("evidence") for h in handed)       # 証拠つきで渡っている
+    pub_fix = [e["detail"] for e in impact if e["detail"]["kind"] == "publication_quality"]
+    assert pub_fix and pub_fix[0]["research_paths_changed"] == [] and pub_fix[0]["tree_before"] == pub_fix[0]["tree_after"]
+
+
+async def test_copied_third_party_text_blocks_publication_even_when_auditor_passes(stack):
+    """公開候補に原論文の要旨が丸ごと入っていれば、監査担当が見逃しても、決定的な検査で止める。見逃しは記録に残る。"""
+    from aar import service, workspace
+    from aar.db.core import connect, fetch_all, fetch_one
+    from aar.mock import mock_papers
+
+    proposal_id = await _proposal(stack)
+    pid = (await service.select_and_start(proposal_id))["id"]
+    p = await _wait(pid, ("completed", "failed"))
+    assert p["outcome"] == "publishable", p["outcome_reason"]
+    with connect() as conn:
+        first = fetch_one(conn, "SELECT detail FROM audit_runs WHERE project_id = %s AND kind = 'publication_quality' ORDER BY round DESC LIMIT 1", (pid,))
+    assert first["detail"]["required_checks"]["violations"] == [] and first["detail"]["required_checks"]["unverified"] == []
+    ws = Path(p["workspace_path"])
+    (ws / "docs" / "source_abstract.md").write_text("# 原論文の要旨\n\n" + mock_papers()[0].abstract + "\n", encoding="utf-8")
+    workspace.commit_all(ws, "原論文の要旨を追加（検証用の不具合）")
+    await service.reopen_project(pid, from_="publication")
+    p = await _wait(pid, ("completed", "failed"), timeout=180)
+    assert p["outcome"] == "not_publishable" and "決定的な検査" in p["outcome_reason"], p["outcome_reason"]
+    with connect() as conn:
+        last = fetch_one(conn, "SELECT detail FROM audit_runs WHERE project_id = %s AND kind = 'publication_quality' ORDER BY round DESC LIMIT 1", (pid,))
+        r = fetch_all(conn, "SELECT issue_id, severity, title FROM audit_findings WHERE project_id = %s AND issue_id LIKE 'R%%'", (pid,))
+    assert last["detail"]["required_checks"]["violations"] == ["third_party_text"]
+    assert last["detail"]["required_disagreements"] == [{"item": "rq_third_party_content", "deterministic": "violation", "auditor": "問題なし"}]
+    assert r and all(f["severity"] == "Major" and "第三者の文章" in f["title"] for f in r)
+
+
+async def test_rate_limit_waits_for_reset_without_probing(stack, monkeypatch):
+    """利用上限に達したら、解除の見込み時刻まで待ち、その間は相手を呼び出さない。解除後に続きから進む。"""
+    from aar import config, service
+    from aar.db.core import connect, fetch_all
+
+    limit_file = stack["tmp"] / "rate_limit.txt"
+    limit_file.write_text("codex 1 You have hit your usage limit. Try again in 4 seconds.\n", encoding="utf-8")
+    monkeypatch.setenv("AAR_MOCK_RATE_LIMIT_FILE", str(limit_file))
+    monkeypatch.setenv("AAR_RATE_LIMIT_MARGIN_S", "0")
+    monkeypatch.setenv("AAR_RATE_LIMIT_MIN_WAIT_S", "1")
+    config.get_settings.cache_clear()
+    proposal_id = await _proposal(stack)
+    pid = (await service.select_and_start(proposal_id))["id"]
+    p = await _wait(pid, ("on_hold", "completed", "failed"))
+    assert p["status"] == "on_hold" and "[rate_limit]" in p["outcome_reason"] and "1/5 回目" in p["outcome_reason"]
+    with connect() as conn:
+        limited = fetch_all(conn, "SELECT provider, source, consecutive_hits FROM provider_limits")
+    assert [(r["provider"], r["source"], r["consecutive_hits"]) for r in limited] == [("codex", "provider_message", 1)]
+    p = await _wait(pid, ("completed", "failed"), timeout=180)
+    assert p["outcome"] == "publishable", p["outcome_reason"]
+    with connect() as conn:
+        waits = fetch_all(conn, "SELECT detail FROM workflow_events WHERE project_id = %s AND event = 'rate_limit_wait'", (pid,))
+        resumed = fetch_all(conn, "SELECT detail FROM workflow_events WHERE project_id = %s AND event = 'resumed'", (pid,))
+        notes = fetch_all(conn, "SELECT title FROM notifications WHERE project_id = %s AND title LIKE '利用上限%%'", (pid,))
+        assert not fetch_all(conn, "SELECT 1 FROM provider_limits")                       # 成功したら状態は消える
+    assert len(waits) == 1 and waits[0]["detail"]["providers"] == ["codex"] and waits[0]["detail"]["source"] == "provider_message"
+    assert [r["detail"]["by"] for r in resumed] == ["timer"] and len(notes) == 1
+    assert limit_file.read_text(encoding="utf-8").startswith("codex 0 ")                 # 上限に当たったのは1回だけ

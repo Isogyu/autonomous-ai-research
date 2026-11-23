@@ -5,6 +5,7 @@ Temporal のアクティビティの入出力にも使うので、すべて JSON
 
 from __future__ import annotations
 
+import datetime as dt
 from datetime import date, datetime
 from typing import Any, Literal
 
@@ -101,6 +102,7 @@ class AgentResult(BaseModel):
     session_id: str | None = None
     error: str | None = None
     error_kind: Literal["auth", "rate_limit", "timeout", "budget", "other"] | None = None
+    retry_at: dt.datetime | None = None     # 利用上限の解除時刻（相手が示した場合だけ。UTC）
 
 
 # ------------------------------------------------------------------ 監査

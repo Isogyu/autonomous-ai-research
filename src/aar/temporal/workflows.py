@@ -21,8 +21,12 @@ from temporalio.exceptions import ActivityError, ApplicationError
 RETRY = RetryPolicy(initial_interval=timedelta(seconds=10), backoff_coefficient=2.0,
                     maximum_interval=timedelta(minutes=5), maximum_attempts=3)
 QUICK = RetryPolicy(initial_interval=timedelta(seconds=2), maximum_interval=timedelta(minutes=1), maximum_attempts=10)
-RATE_LIMIT_WAIT = timedelta(minutes=30)
+RATE_LIMIT_WAIT = timedelta(minutes=30)      # 旧方式（一定間隔）。実行中だった研究の再生のために残す
 MAX_RATE_LIMIT_WAITS = 12
+# 新方式: 解除の見込み時刻まで待つ。1つの工程で自動的に待つのはこの回数まで、1回の待ちはこの長さまで。
+# 超える場合は、人が再開するまで止まる（上限を回避するための際限のない再試行はしない）
+MAX_AUTO_RATE_WAITS = 5
+MAX_AUTO_RATE_WAIT = timedelta(hours=8)
 MAX_IMPLEMENT_ATTEMPTS = 3
 
 
@@ -165,7 +169,22 @@ class ResearchWorkflow:
                 if not held:
                     raise
                 kind, message = held
-                if kind == "rate_limit":
+                if kind == "rate_limit" and workflow.patched("rate-limit-reset-time"):
+                    rate_waits += 1
+                    plan = await self._quick("rate_limit_wait", self.s.project_id, rate_waits, MAX_AUTO_RATE_WAITS)
+                    wait = timedelta(seconds=int(plan["seconds"]))
+                    if rate_waits > MAX_AUTO_RATE_WAITS:
+                        await self._wait_resume(kind, f"利用上限が {MAX_AUTO_RATE_WAITS} 回待っても解けない。自動の再試行をやめた。"
+                                                      f"利用枠を確かめてから、人が再開する（aar projects resume）: {message}")
+                        rate_waits = 0
+                    elif wait > MAX_AUTO_RATE_WAIT:
+                        await self._wait_resume(kind, f"利用上限の解除の見込みが {plan['until_local']} で、自動で待つ上限を超える。"
+                                                      f"解除後に、人が再開する（aar projects resume）: {message}")
+                    else:
+                        await self._wait_resume(kind, f"利用上限のため {plan['until_local']} ごろまで待って自動で再開する"
+                                                      f"（{rate_waits}/{MAX_AUTO_RATE_WAITS} 回目。それまで問い合わせない）: {message}",
+                                                timeout=wait)
+                elif kind == "rate_limit":
                     rate_waits += 1
                     if rate_waits > MAX_RATE_LIMIT_WAITS:
                         await self._wait_resume(kind, f"利用上限が解けない: {message}")
