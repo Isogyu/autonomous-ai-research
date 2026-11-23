@@ -292,3 +292,72 @@ def test_seatbelt_blocks_network_and_outside_writes(tmp_path):
 
 def test_workspace_git_ignores_user_hooks(ws):
     assert subprocess.run(["git", "log", "--oneline"], cwd=ws, capture_output=True, text=True).stdout.count("\n") == 1
+
+
+# ------------------------------------------------------------------ 公開候補の提出
+
+
+def test_submit_pull_request_holds_without_remote_or_on_wrong_branch(ws):
+    from aar.config import PublicationPolicy
+    from aar.publish.github import submit_pull_request
+
+    policy = PublicationPolicy(channels={"github_pr": {"enabled": True}})
+    assert submit_pull_request(ws, branch="research/x", title="t", body="b", policy=policy, remote_repo=None)["status"] == "held"
+    assert submit_pull_request(ws, branch="main", title="t", body="b", policy=policy, remote_repo="o/r")["status"] == "held"
+    off = PublicationPolicy(create_pull_request=False)
+    assert submit_pull_request(ws, branch="research/x", title="t", body="b", policy=off, remote_repo="o/r")["status"] == "skipped"
+
+
+def test_submit_pull_request_refuses_public_repo_and_is_idempotent(ws, tmp_path, monkeypatch):
+    """gh を偽物に置き換え、公開範囲の確認と、PR を重複して作らないことを確かめる。"""
+    import os
+
+    from aar.config import PublicationPolicy
+    from aar.publish import github
+
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    log = tmp_path / "gh.log"
+    (fake / "gh").write_text(f"""#!/bin/sh
+echo "$@" >> {log}
+case "$1 $2" in
+  "repo view") echo '{{"visibility":"'"$FAKE_VIS"'","defaultBranchRef":{{"name":"main"}},"nameWithOwner":"o/r"}}' ;;
+  "pr list") if [ -f {tmp_path}/created ]; then echo '[{{"url":"https://example.invalid/pr/1","state":"OPEN"}}]'; else echo '[]'; fi ;;
+  "pr create") touch {tmp_path}/created; echo "https://example.invalid/pr/1" ;;
+esac
+""")
+    (fake / "gh").chmod(0o755)
+    bare = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "url." + str(bare) + ".insteadOf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "https://github.com/o/r.git")
+    wsmod.ensure_branch(ws, "research/x")
+    policy = PublicationPolicy(channels={"github_pr": {"enabled": True}})
+    args = dict(branch="research/x", title="t", body="b", policy=policy, remote_repo="o/r")
+
+    monkeypatch.setenv("FAKE_VIS", "PUBLIC")
+    held = github.submit_pull_request(ws, **args)
+    assert held["status"] == "held" and "公開範囲" in held["reason"]
+    assert "pr create" not in log.read_text()                      # 公開リポジトリには push も PR もしない
+
+    monkeypatch.setenv("FAKE_VIS", "PRIVATE")
+    assert github.submit_pull_request(ws, **args) == {"status": "created", "url": "https://example.invalid/pr/1"}
+    assert github.submit_pull_request(ws, **args) == {"status": "exists", "url": "https://example.invalid/pr/1"}
+    assert log.read_text().count("pr create") == 1                  # 再試行しても PR は1つ
+    pushed = subprocess.run(["git", "branch", "--list"], cwd=bare, capture_output=True, text=True).stdout
+    assert "research/x" in pushed and "main" not in pushed          # main は push されない
+
+
+def test_chart_labels_stay_distinct_when_names_differ_only_at_the_end():
+    rows = [{"condition": f"承認ゲートあり・高危険比率20%・相関0.2・重み w={w}", "value": v} for w, v in ((0.25, 1.0), (0.5, 2.0))]
+    svg = charts.interval_chart("m", rows)
+    assert "w=0.25</text>" in svg and "w=0.5</text>" in svg
+
+
+def test_check_numbers_accepts_figures_quoted_from_the_source_paper(tmp_path):
+    w = _result_ws(tmp_path)
+    (w / "report/report.md").write_text("論文は成功率が 58.33% から 16.67% に下がったと報告している。\n")
+    assert check_numbers(w, ["report/report.md"])
+    assert not check_numbers(w, ["report/report.md"], ["utility dropped from 58.33% to 16.67%"])

@@ -104,7 +104,8 @@ CRITIQUE_SCHEMA = _obj({
 
 def experiment_contract(packages: list[str]) -> str:
     return f"""## 実験コードの決まり（オーケストレーターがこの形で実行する）
-- 実行環境: ネットワークなしの隔離環境、Python 3.11 以上。使えるライブラリは標準ライブラリと {", ".join(packages)} だけ。
+- 実行環境: ネットワークなしの隔離環境、Python 3.12。使えるライブラリは標準ライブラリと {", ".join(packages)} だけ
+  （`requirements.txt` に `name==version` で書いた版が導入される。Python 3.12 に対応する版を書くこと）。
   外部 API・モデルのダウンロード・LLM の呼び出しはできない。データは `data/` にあるものか、コードで生成するものを使う。
 - `experiments/run.py --stage pilot|main --out <dir>`
   - `<dir>/raw.jsonl`（試行ごとの生データ。後から独立に再計算できる粒度で）と `<dir>/run_meta.json`

@@ -12,8 +12,12 @@ task.md・evaluate.py・capture.py・program_0/ を持つディレクトリと�
     allow_host_execution を明示的に指定しない限り起動しない。
   * 0.1.0 Alpha でリリースタグがない → 動作確認したコミットに固定して使う（PINNED_COMMIT）。
 
-**このアダプターは 2026-11-23 時点で実機での実行を確認していない**（ディスク残量の不足で依存関係を導入できなかった）。
-コマンドの組み立てと結果の読み取りは、上流のコードと文書を読んで書いたもので、単体テストは形式だけを確かめている。
+確認できた範囲（2026-11-23、macOS・Apple M3）: 固定コミットで `uv sync`、`agsci doctor --json` が全項目通過、
+`agsci run examples/circpack --dry-run` が全フェーズのコマンドを表示して終了。
+macOS では一時領域の既定の場所（/var/folders 以下）がシンボリックリンクを含むとして拒否されるので、
+AGENTIC_TEMP_ROOT を実在のディレクトリに向ける必要がある（このアダプターが設定する）。
+**エージェントを実際に動かす探索は実行していない**（全権限のエージェントをこの PC のホストで動かさないため）。
+このアダプターはワークフローにもまだつないでいない。結果の読み取りは上流のコードと文書に基づく。
 """
 
 from __future__ import annotations
@@ -98,7 +102,10 @@ async def run_investigation(ais_dir: Path, task_dir: Path, run_dir: Path, limits
         raise AiScientistUnavailable("AI Scientist v3 のネイティブ実行は、エージェントがホスト上で全権限で動く。"
                                      "専用のユーザーや仮想マシンで動かす場合だけ allow_host_execution を指定する")
     resume = (run_dir / "outer_state.json").exists()
-    env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")} | {"HEADLESS_BILLING": "subscription"}
+    tmp_root = run_dir.parent / ".agentic-tmp"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")} | {
+        "HEADLESS_BILLING": "subscription", "AGENTIC_TEMP_ROOT": str(tmp_root.resolve())}
     proc = await asyncio.create_subprocess_exec(
         *investigate_command(ais_dir, task_dir, run_dir, limits, resume=resume), cwd=str(ais_dir), env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)

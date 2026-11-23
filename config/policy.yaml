@@ -99,19 +99,17 @@ publication:
 
 # ---- 安全 ----
 safety:
-  sandbox: seatbelt            # docker / seatbelt / none。最も強い隔離は docker。seatbelt は macOS 用の代替（ADR-0006）
+  sandbox: docker              # docker / seatbelt / none。最も強い隔離は docker。seatbelt は Docker を使えない場合の代替（ADR-0006）
   docker_image: python:3.12-slim
   docker_network: none         # 実験コードの実行時はネットワークを切る
   docker_memory: 2g
   docker_cpus: 2
   experiment_timeout_minutes: 30
   allow_metered_api_in_experiments: false   # 実験コードから従量課金 API を呼ぶことを許すか
-  hold_on:                     # ここに当たる事象は研究を保留にして通知する
-    - budget_exceeded
-    - auth_failure
-    - policy_changed
-    - secret_detected
-    - publish_scope_violation
+  min_free_disk_mb: 150        # ディスクの空きがこれを下回ったら、次の工程を始めずに保留にする
+  # 次の事象では研究を保留にして通知する（再試行しない）:
+  #   認証切れ / 費用上限 / この方針ファイルの変更 / 監査 Skill の不足 / ディスクの空き不足
+  # 利用上限は30分ごとに自動で再開を試みる。秘密情報や公開範囲の違反は、公開候補の提出を止める。
 
 notify:
   macos: true                  # macOS の通知センターに出す

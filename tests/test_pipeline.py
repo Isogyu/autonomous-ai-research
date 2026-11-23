@@ -26,7 +26,7 @@ async def stack(db_url, tmp_path, monkeypatch):
 
     policy = tmp_path / "policy.yaml"
     policy.write_text((ROOT / "config" / "policy.yaml").read_text(encoding="utf-8")
-                      .replace("sandbox: seatbelt", "sandbox: none").replace("macos: true", "macos: false"), encoding="utf-8")
+                      .replace("sandbox: docker ", "sandbox: none ").replace("macos: true", "macos: false"), encoding="utf-8")
     skill = tmp_path / "skills" / "independent-research-audit"
     (skill / "assets").mkdir(parents=True)
     (skill / "SKILL.md").write_text("# テスト用の監査 Skill の代わり\n", encoding="utf-8")

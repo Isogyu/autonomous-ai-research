@@ -1,6 +1,8 @@
 """埋め込みの計算。
 
-  e5   : intfloat/multilingual-e5-small（384次元、MIT、日英混在に対応）。fastembed（ONNX）が入っていれば使う。
+  fastembed : sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2（384次元、Apache-2.0、日本語と英語を含む
+              50 以上の言語）。fastembed（ONNX、CPU）が入っていれば使う。当初の候補 multilingual-e5-small は
+              fastembed の対応モデルに無かったため、同じ 384 次元のこのモデルにした（ADR-0004）。
   hash : 文字 n-gram のハッシュによる 384 次元ベクトル。追加の導入なしで動くが、捉えるのは表記の近さだけで
          意味の近さではない。モデルを置く余裕がない環境向けの代用で、記録上も別のモデル名（hash-ngram-384）になる。
 どちらで作ったベクトルかは embeddings.model に残り、検索は同じモデルのベクトルどうしでだけ行う。
@@ -52,17 +54,22 @@ class HashEmbedder:
         return out
 
 
-class E5Embedder:
+class FastEmbedEmbedder:
     semantic = True
 
     def __init__(self, model: str) -> None:
         from fastembed import TextEmbedding  # 任意の依存（pip install '.[embed]'）
 
         self.name = model
-        self._model = TextEmbedding(model_name=model)
+        from aar.config import get_settings
+
+        cache = get_settings().data_dir / "models"   # 一時フォルダだと再起動で消えるので、データ用の場所に置く
+        cache.mkdir(parents=True, exist_ok=True)
+        self._model = TextEmbedding(model_name=model, cache_dir=str(cache))
 
     def embed(self, texts: list[str], *, is_query: bool = False) -> list[list[float]]:
-        prefix = "query: " if is_query else "passage: "   # e5 系は用途を示す接頭辞を付ける
+        # e5 系だけは用途を示す接頭辞が要る
+        prefix = ("query: " if is_query else "passage: ") if "e5" in self.name.lower() else ""
         vecs = self._model.embed([prefix + t[:2000] for t in texts])
         out = []
         for v in vecs:
@@ -78,7 +85,7 @@ def get_embedder(model: str) -> Embedder:
     if model in ("hash", HashEmbedder.name):
         return HashEmbedder()
     try:
-        emb = E5Embedder(model)
+        emb = FastEmbedEmbedder(model)
         assert len(emb.embed(["確認"])[0]) == DIM
         return emb
     except Exception:  # noqa: BLE001 - 導入されていない・モデルを取得できない場合はすべて代用に回す

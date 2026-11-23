@@ -37,7 +37,7 @@ from aar.publish import deliverables as deliv
 from aar.publish import github as ghpub
 from aar.sources.repository import collect_all, upsert_papers
 
-HOLD_KINDS = ("auth", "budget", "policy_changed", "secret_detected", "publish_scope", "rate_limit", "setup")
+HOLD_KINDS = ("auth", "budget", "policy_changed", "rate_limit", "setup", "resource")
 
 
 def hold(kind: str, message: str) -> ApplicationError:
@@ -91,8 +91,10 @@ def make_ctx(project_id: str) -> tuple[native.Ctx, dict[str, Any], Policy]:
         with connect() as c:
             return store.budget_state(c, project_id)["remaining"]
 
+    # docker なら requirements.txt に書いた版がイメージに入る。seatbelt ではオーケストレーターの環境にあるものだけ
+    packages = ["numpy", "scipy", "pandas"] if policy.safety.sandbox == "docker" else ["numpy"]
     ctx = native.Ctx(project_id=project_id, ws=workspace_of(project_id), policy=policy, runners=runners_for(mode),
-                     on_cost=on_cost, remaining_budget=remaining, heartbeat=_beat)
+                     on_cost=on_cost, remaining_budget=remaining, heartbeat=_beat, packages=packages)
     return ctx, project, policy
 
 
@@ -103,6 +105,8 @@ async def _phase(project_id: str, phase: str, key: str, fn: Callable[[], Awaitab
         done = run_once(conn, full_key, "phase")
         if done is not None:
             return done
+    _check_disk()
+    with connect() as conn:
         store.set_project(conn, project_id, phase=phase, status="running")
         store.log_event(conn, project_id, project_id, "phase_started", {"phase": phase, "key": key,
                                                                          "attempt": _attempt()})
@@ -116,6 +120,16 @@ async def _phase(project_id: str, phase: str, key: str, fn: Callable[[], Awaitab
         record_once(conn, full_key, "phase", result)
         store.log_event(conn, project_id, project_id, "phase_completed", {"phase": phase, "key": key}, key=f"{full_key}:done")
     return result
+
+
+def _check_disk() -> None:
+    """ディスクの空きが少なければ、工程を始めずに保留にする（書き込みの途中で尽きると記録が壊れるため）。"""
+    import shutil
+
+    need = load_policy().safety.min_free_disk_mb
+    free = shutil.disk_usage(get_settings().workspaces_dir.parent).free / 1e6
+    if free < need:
+        raise hold("resource", f"ディスクの空きが {free:.0f}MB で、基準の {need}MB を下回っている。空きを作ってから再開する")
 
 
 def _attempt() -> int:
@@ -443,10 +457,11 @@ async def publication_audit(project_id: str, round_no: int) -> dict[str, Any]:
         settings = get_settings()
         choice = policy.research.model_for("auditor")
         implementer = policy.research.model_for("implementer")
-        mech = deliv.mechanical_publication_checks(ctx.ws)
-        tests = await native.run_tests(ctx)
         with connect() as conn:
             prior = store.latest_findings(conn, project_id, "publication_quality") if round_no > 1 else []
+            prop = store.get_proposal_for_project(conn, project_id)
+        mech = deliv.mechanical_publication_checks(ctx.ws, [prop.get("paper_abstract"), prop.get("body")])
+        tests = await native.run_tests(ctx)
         mech_view = {k: v for k, v in mech.items() if k != "secrets"} | {"secrets": [h["path"] + " / " + h["kind"] for h in mech["secrets"]]}
         report, res, commit = await pubaudit.run_publication_audit(
             ctx.runners[choice.agent], model=choice.model, skill_dir=settings.publication_audit_skill_dir, ws=ctx.ws,
@@ -595,7 +610,7 @@ async def mark_hold(project_id: str, kind: str, message: str, seq: int) -> None:
         store.set_project(conn, project_id, status="on_hold", outcome_reason=f"[{kind}] {message}"[:1000])
         store.log_event(conn, project_id, project_id, "on_hold", {"kind": kind, "message": message}, key=f"{project_id}:hold:{seq}")
         title = {"auth": "認証が必要", "budget": "費用上限に到達", "policy_changed": "方針ファイルが変更された",
-                 "rate_limit": "利用上限のため待機", "setup": "設定が不足", "paused": "一時停止"}.get(kind, "保留")
+                 "rate_limit": "利用上限のため待機", "setup": "設定が不足", "resource": "ディスクの空きが不足", "paused": "一時停止"}.get(kind, "保留")
         store.notify(conn, project_id, "warning", f"{title}: {project['title'][:50]}", message[:500],
                      f"{project_id}:hold:{seq}", macos=bool(load_policy().notify.get("macos", True)))
 

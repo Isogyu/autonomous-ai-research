@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     contact_email: str = ""
     openalex_api_key: str = ""
     semantic_scholar_api_key: str = ""
-    embedding_model: str = "intfloat/multilingual-e5-small"
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     # mock にすると外部 API とエージェント CLI を呼ばない（結果は mock として記録される）
     mode: str = "real"
     ui_host: str = "127.0.0.1"
@@ -127,6 +127,7 @@ class SafetyPolicy(BaseModel):
     docker_cpus: float = 2
     experiment_timeout_minutes: int = 30
     allow_metered_api_in_experiments: bool = False
+    min_free_disk_mb: int = 150
     hold_on: list[str] = Field(default_factory=list)
 
 

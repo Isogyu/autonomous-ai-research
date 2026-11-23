@@ -71,7 +71,7 @@ def results_block(results: list[dict[str, Any]], verdicts: dict[str, str]) -> st
     lines = ["### 仮説の判定（事前登録の基準による）", ""]
     lines += [f"- **{k}**: {v.get(s, s)}" for k, s in sorted(verdicts.items())] or ["（判定なし）"]
     lines += ["", "### 事前登録した仮説の検証結果", "", results_table(results, "confirmatory"), "",
-              "### 探索的分析（事前登録にない分析。仮説の検証ではない）", "", results_table(results, "exploratory")]
+              "### 探索的分析（仮説の検証ではない。事前登録の判定基準を当てはめていない分析）", "", results_table(results, "exploratory")]
     return "\n".join(lines)
 
 
@@ -265,8 +265,11 @@ def check_numbers(ws: Path, files: list[str], extra_facts: Any = None) -> list[s
     return unknown
 
 
-def mechanical_publication_checks(ws: Path) -> dict[str, Any]:
-    """公開品質のうち、機械的に確かめられるもの。"""
+def mechanical_publication_checks(ws: Path, source_facts: Any = None) -> dict[str, Any]:
+    """公開品質のうち、機械的に確かめられるもの。
+
+    source_facts には原論文の要旨や企画を渡す（そこに書かれた数値の引用を、由来不明と誤って数えないため）。
+    """
     readme = (ws / "README.md").read_text(encoding="utf-8") if (ws / "README.md").exists() else ""
     report = (ws / "report" / "report.md").read_text(encoding="utf-8") if (ws / "report" / "report.md").exists() else ""
     secrets = wsmod.scan_secrets(ws)
@@ -278,7 +281,7 @@ def mechanical_publication_checks(ws: Path) -> dict[str, Any]:
         "has_repro": bool(re.search(r"^#+.*再現", readme, flags=re.M)) and "experiments/run.py" in readme,
         "has_license": (ws / "LICENSE").exists(),
         "missing_sections": missing_sections,
-        "unknown_numbers": check_numbers(ws, ["report/report.md", "README.md", "report/talk_script.md"]),
+        "unknown_numbers": check_numbers(ws, ["report/report.md", "README.md", "report/talk_script.md"], source_facts),
         "deliverables": {p: (ws / p).exists() for p in (
             "report/report.md", "report/report.html", "README.md", "report/talk_script.md", "report/future_work.md",
             "docs/limitations.md", "docs/references.md", "LICENSE")},

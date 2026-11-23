@@ -26,6 +26,8 @@ CLAIM_STATUSES = {"verified": "Verified", "supported": "Supported", "inconclusiv
                   "contradicted": "Contradicted", "not tested": "Not Tested", "not_tested": "Not Tested"}
 SEVERITIES = {"critical": "Critical", "major": "Major", "minor": "Minor", "improvement": "Improvement"}
 
+WITHHELD = ("docs/critique", "report", "publication", "audit")   # 研究監査の対象から除くもの
+
 SUMMARY_SCHEMA = {
     "type": "object",
     "properties": {
@@ -63,9 +65,18 @@ def snapshot_target(ws: Path, dest: Path) -> str:
         shutil.rmtree(dest)
     subprocess.run(["git", "clone", "--no-hardlinks", "--quiet", str(ws), str(dest)], check=True, capture_output=True, timeout=600)
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=dest, capture_output=True, text=True, check=True).stdout.strip()
-    # 研究側の結論を含む文書は監査担当に見せない（独立した再計算の妨げになるため）
-    for rel in ("docs/critique", "report", "publication"):
+    # 研究側の結論を含む文書は監査担当に見せない（独立した再計算の妨げになるため）。
+    # 除いた状態を複製の中でコミットし、「追跡ファイルが消えている」という見え方にならないようにする。
+    # 発信用の資料の表現と数値は、公開品質監査が全ファイルを見て別に確かめる。
+    removed = [rel for rel in WITHHELD if (dest / rel).exists()]
+    for rel in removed:
         shutil.rmtree(dest / rel, ignore_errors=True)
+    if removed:
+        run = lambda *a: subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=audit-snapshot",  # noqa: E731
+                                         "-c", "user.email=audit-snapshot@example.invalid", *a], cwd=dest,
+                                        capture_output=True, timeout=120)
+        run("add", "-A")
+        run("commit", "-q", "-m", "監査用の複製: 研究側の結論と発信用の資料を除外")
     return commit
 
 
@@ -148,6 +159,10 @@ Skill が参照する references/ と assets/ も `{skill_dir}` にある。
 - 主要な数値は、対象の集計コードを import せず、`raw.jsonl` などの生データから別実装で再計算する。
   再計算コードは `independent_checks/` に置き、実行した結果を `recomputed_metrics.csv` に書く。
 - 研究側の報告書や結論の文章には頼らない。事前登録と生データ、コードから自分で判断する。
+- この複製からは、研究側の結論と発信用の資料（`report/`、`docs/critique/`、過去の監査記録 `audit/`）を意図的に除いてある
+  （複製の最後のコミットがその除外）。この監査の範囲は研究そのものの妥当性で、発信用の資料の表現と数値は
+  別の監査（公開品質監査）が確かめる。除外されていること自体や、README からのリンク切れを指摘にしない。
+  発信可否の判定は「この研究結果を、限界を明記したうえで発信してよいか」として行う。
 - `claims.csv` `evidence.csv` `issues.csv` `recomputed_metrics.csv` `executive_summary.md` を必ず作る。
   claims.csv の status は Verified / Supported / Inconclusive / Contradicted / Not Tested のいずれか、
   issues.csv の severity は Critical / Major / Minor / Improvement のいずれか（この綴りのまま）。

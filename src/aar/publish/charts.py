@@ -75,6 +75,22 @@ def _fit(text: str, units: int) -> str:
     return out
 
 
+def _fit_middle(text: str, units: int) -> str:
+    """先頭と末尾を残して中ほどを省く（末尾だけが違う条件名を区別できるようにする）。"""
+    width = sum(2 if ord(ch) > 0x2E7F else 1 for ch in text)
+    if width <= units:
+        return text
+    half = (units - 1) // 2
+    head = _fit(text, half + 1).rstrip("…")
+    used, tail = 0, ""
+    for ch in reversed(text):
+        w = 2 if ord(ch) > 0x2E7F else 1
+        if used + w > half:
+            break
+        used, tail = used + w, ch + tail
+    return f"{head}…{tail}"
+
+
 def _nice_ticks(lo: float, hi: float, n: int = 5) -> list[float]:
     if hi <= lo:
         hi = lo + 1
@@ -115,10 +131,16 @@ def interval_chart(metric: str, rows: list[dict[str, Any]], *, width: int = 720)
         cls = "zero" if t == 0 else "grid"
         parts.append(f'<line class="{cls}" x1="{x(t):.1f}" x2="{x(t):.1f}" y1="{top}" y2="{base_y}" stroke-width="1"/>')
         parts.append(f'<text class="sub" x="{x(t):.1f}" y="{base_y + 18}" font-size="11" text-anchor="middle">{fmt(t, 3)}</text>')
+    names = [str(r.get("condition") or r.get("hypothesis") or "") for r in rows]
+    shorts = [_fit(n, 30) for n in names]
+    if len(set(shorts)) < len(set(names)):   # 末尾を切ると区別できなくなる場合は、中ほどを省く
+        shorts = [_fit_middle(n, 30) for n in names]
+    if len(set(shorts)) < len(set(names)):   # それでも重なるなら番号を付ける（全文はマウスを載せると出る）
+        shorts = [f"{i + 1}. {_fit_middle(n, 26)}" for i, n in enumerate(names)]
     for i, r in enumerate(rows):
         y = top + row_h * i + row_h / 2
-        name = str(r.get("condition") or r.get("hypothesis") or "")
-        short = _fit(name, 30)
+        name = names[i]
+        short = shorts[i]
         ci_tip = f"95%区間 {fmt(los[i])} 〜 {fmt(his[i])}、" if his[i] > los[i] else "区間なし、"
         tip = f"{name}: {fmt(vals[i])}（{ci_tip}n={fmt(r.get('n'))}）"
         parts.append(f'<g><title>{e(tip)}</title>'

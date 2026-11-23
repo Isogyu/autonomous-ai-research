@@ -44,6 +44,7 @@ aar = ["db/migrations/*.sql", "ui/templates/*.html", "prompts/*.md", "publish/te
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
   "db: 実際の PostgreSQL＋pgvector が必要（AAR_TEST_DATABASE_URL を設定したときだけ実行）",
   "live: 外部 API や実際のエージェント CLI を呼ぶ（AAR_LIVE=1 のときだけ実行）",
