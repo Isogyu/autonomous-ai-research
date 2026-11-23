@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>研究履歴の検索</h1>
+<form method="get" action="/search">
+  <p><input type="search" name="q" value="{{ query }}" placeholder="検索したい言葉" aria-label="検索語"></p>
+  <p>{% for k, label in KIND_LABELS.items() %}<label class="check"><input type="checkbox" name="kind" value="{{ k }}" {% if k in kinds %}checked{% endif %}> {{ label }}</label>{% endfor %}</p>
+  <p class="muted">種類を選ばないとすべてを検索します。</p>
+  <p><button type="submit">検索する</button></p>
+</form>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if searched and not error %}
+  {% if not results %}<p>見つかりませんでした。</p>{% endif %}
+  {% for r in results %}
+  <div class="card">
+    <p><span class="tag">{{ KIND_LABELS.get(r.entity_type, r.entity_type) }}</span> <strong>{{ r.title }}</strong></p>
+    <p>{{ r.snippet }}</p>
+    <p class="muted">関連度: {{ r.score|num(3) }}
+      {% if r.project_id %} ／ <a href="/projects/{{ r.project_id }}">関連する研究 {{ r.project_id }}</a>{% endif %}</p>
+  </div>
+  {% endfor %}
+{% endif %}
+{% endblock %}

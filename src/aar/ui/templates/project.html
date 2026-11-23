@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}{{ project.title }}{% endblock %}
+{% block content %}
+<p><a href="/projects">← 研究一覧</a></p>
+<h1>{{ project.title }}</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if project.execution_mode == 'mock' %}<p class="notice">モック実行（実際の実験・監査ではない）</p>{% endif %}
+
+<div class="card"><dl>
+  <dt>状態</dt><dd><span class="{% if project.status == 'running' %}ok{% elif project.status == 'failed' %}bad{% elif project.status in ('paused','on_hold') %}warn{% endif %}">{{ STATUS_LABELS.get(project.status, project.status) }}（{{ project.status }}）</span>{% if refresh %}　<span class="muted">15秒ごとに自動更新</span>{% endif %}</dd>
+  <dt>工程</dt><dd>{{ project.phase }}</dd>
+  <dt>結果</dt><dd>{% if project.outcome %}{{ OUTCOME_LABELS.get(project.outcome, project.outcome) }}（{{ project.outcome }}）{% else %}まだありません{% endif %}{% if project.outcome_reason %}<br>理由: {{ project.outcome_reason }}{% endif %}</dd>
+  <dt>研究 ID / エンジン</dt><dd>{{ project.id }} ／ {{ project.engine }}</dd>
+  <dt>開始 / 終了</dt><dd>{{ project.started_at|dt or '—' }} ／ {{ project.finished_at|dt or '—' }}</dd>
+  <dt>PR</dt><dd>{% set u = project.pr_url|safe_url %}{% if u %}<a href="{{ u }}" rel="noopener noreferrer">{{ u }}</a>{% elif project.pr_url %}{{ project.pr_url }}{% else %}まだありません{% endif %}</dd>
+</dl></div>
+
+{% if project.status in ('running', 'paused', 'on_hold') %}
+<div class="card">
+  {% if project.status == 'running' %}
+  <form class="inline" method="post" action="/projects/{{ project.id }}/control"><input type="hidden" name="action" value="pause"><button class="sub" type="submit">一時停止</button></form>
+  {% else %}
+  <form class="inline" method="post" action="/projects/{{ project.id }}/control"><input type="hidden" name="action" value="resume"><button type="submit">再開</button></form>
+  {% endif %}
+  <form class="inline" method="post" action="/projects/{{ project.id }}/control"><input type="hidden" name="action" value="cancel"><button class="danger" type="submit">中止する（取り消せません）</button></form>
+</div>
+{% endif %}
+
+<h2>費用</h2>
+<p>合計 <strong>${{ cost_total|num }}</strong> / 上限 ${{ project.budget_usd|num }}</p>
+{% if cost_rows %}
+<div class="tablewrap"><table>
+  <tr><th>課金の種類</th><th>金額</th></tr>
+  {% for c in cost_rows %}
+  <tr><td>{{ c.billing }}{% if c.has_estimate %}（推定を含む）{% endif %}</td><td>${{ c.amount_usd|num(4) }}</td></tr>
+  {% endfor %}
+</table></div>
+{% if cost_rows|selectattr('billing', 'equalto', 'subscription_equivalent')|list %}
+<p class="muted">subscription_equivalent: 定額契約の利用量を API 定価に換算した推定額です（実際の請求額ではありません）。</p>
+{% endif %}
+{% endif %}
+
+<h2>仮説と判定</h2>
+{% macro hyp_table(rows) %}
+<div class="tablewrap"><table>
+  <tr><th>ラベル</th><th>仮説</th><th>判定基準</th><th>判定</th></tr>
+  {% for h in rows %}
+  <tr><td>{{ h.label }}（{{ h.cycle }}回目）</td><td>{{ h.statement }}</td><td>{{ h.decision_rule or '—' }}</td><td>{{ h.status }}</td></tr>
+  {% endfor %}
+</table></div>
+{% endmacro %}
+<h3>事前登録した仮説（preregistered）</h3>
+{% if hyp_pre %}{{ hyp_table(hyp_pre) }}{% else %}<p class="muted">なし</p>{% endif %}
+<h3>探索的な仮説（exploratory）</h3>
+{% if hyp_exp %}{{ hyp_table(hyp_exp) }}{% else %}<p class="muted">なし</p>{% endif %}
+
+<h2>事前登録</h2>
+{% if preregs %}
+<div class="tablewrap"><table>
+  <tr><th>回</th><th>ハッシュ（sha256）</th><th>コミット</th><th>登録日時</th></tr>
+  {% for r in preregs %}
+  <tr><td>{{ r.cycle }}</td><td><code>{{ r.content_sha256 }}</code></td><td><code>{{ r.git_commit or '—' }}</code></td><td>{{ r.registered_at|dt }}</td></tr>
+  {% endfor %}
+</table></div>
+{% else %}<p class="muted">まだ事前登録がありません。</p>{% endif %}
+
+<h2>実験</h2>
+{% if experiments %}
+<div class="tablewrap"><table>
+  <tr><th>回</th><th>種類</th><th>名前</th><th>状態</th><th>費用</th><th>時間(秒)</th></tr>
+  {% for e in experiments %}
+  <tr><td>{{ e.cycle }}</td><td>{{ e.kind }}</td><td>{{ e.name }}{% if e.execution_mode == 'mock' %} <span class="tag warn">モック</span>{% endif %}</td><td>{{ e.status }}</td><td>{{ e.cost_usd|num(4) }}</td><td>{{ e.duration_s|num(1) }}</td></tr>
+  {% endfor %}
+</table></div>
+{% else %}<p class="muted">まだ実験がありません。</p>{% endif %}
+
+<h2>分析結果</h2>
+{% macro res_table(rows) %}
+<div class="tablewrap"><table>
+  <tr><th>仮説</th><th>指標</th><th>条件</th><th>値</th><th>信頼区間</th><th>効果量</th><th>p値</th><th>n</th></tr>
+  {% for r in rows %}
+  <tr><td>{{ r.hypothesis or '—' }}</td><td>{{ r.metric }}</td><td>{{ r.condition or '—' }}</td><td>{{ r.value|num(4) }}</td>
+    <td>{{ r.ci_low|num(3) }} 〜 {{ r.ci_high|num(3) }}</td><td>{{ r.effect_size|num(3) }}</td><td>{{ r.p_value|num(4) }}</td><td>{{ r.n if r.n is not none else '—' }}</td></tr>
+  {% endfor %}
+</table></div>
+{% endmacro %}
+<h3>確認的分析（confirmatory）</h3>
+{% if results.confirmatory %}{{ res_table(results.confirmatory) }}{% else %}<p class="muted">なし</p>{% endif %}
+<h3>探索的分析（exploratory）</h3>
+{% if results.exploratory %}{{ res_table(results.exploratory) }}{% else %}<p class="muted">なし</p>{% endif %}
+
+<h2>監査</h2>
+{% if not audits %}<p class="muted">まだ監査がありません。</p>{% endif %}
+{% for a in audits %}
+<div class="card">
+  <h3>{{ 'publication_quality' if a.kind == 'publication_quality' else 'research' }} 監査 第{{ a.round }}回
+    <span class="tag">{{ a.status }}</span>{% if a.execution_mode == 'mock' %}<span class="tag warn">モック</span>{% endif %}</h3>
+  <p>研究妥当性: {{ a.research_verdict or '—' }} ／ 発信可否: {{ a.publication_verdict or '—' }} ／ 点数: {{ a.score|num(1) }}</p>
+  {% if a.summary %}<p class="muted">{{ a.summary }}</p>{% endif %}
+  {% if a.findings %}
+  <h3>指摘（重大度順）</h3>
+  <div class="tablewrap"><table>
+    <tr><th>重大度</th><th>ID</th><th>内容</th><th>状態</th></tr>
+    {% for f in a.findings %}
+    <tr><td class="{% if f.severity in ('Critical','Major') %}bad{% endif %}">{{ f.severity }}{% if f.certainty == 'Suspected' %}（疑い）{% endif %}</td><td>{{ f.issue_id }}</td><td>{{ f.title }}</td><td>{{ FINDING_STATUS_LABELS.get(f.status, f.status) }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+  {% if a.claims %}
+  <h3>主張ごとの判定</h3>
+  <div class="tablewrap"><table>
+    <tr><th>ID</th><th>主張</th><th>判定</th></tr>
+    {% for c in a.claims %}
+    <tr><td>{{ c.claim_id }}{% if c.is_primary %}（主）{% endif %}</td><td>{{ c.claim_text }}{% if c.limitations %}<br><span class="muted">制約: {{ c.limitations }}</span>{% endif %}</td><td>{{ c.status }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+</div>
+{% endfor %}
+
+<h2>品質ゲート</h2>
+{% if not gates %}<p class="muted">まだ評価されていません。</p>{% endif %}
+{% for g in gates %}
+<div class="card">
+  <h3>{{ g.gate }} ゲート 第{{ g.round }}回:
+    {% if g.passed %}<span class="ok">✓ 合格</span>{% else %}<span class="bad">✗ 不合格</span>{% endif %}</h3>
+  <ul>
+  {% for c in g.checks %}
+    <li>{% if c.get('passed') %}<span class="ok">✓ 合格</span>{% else %}<span class="bad">✗ 不合格</span>{% endif %}
+      {{ c.get('name', '') }}{% if c.get('detail') %} <span class="muted">— {{ c.get('detail') }}</span>{% endif %}</li>
+  {% endfor %}
+  </ul>
+</div>
+{% endfor %}
+
+<h2>成果物</h2>
+{% if drafts %}
+<h3>公開用の下書き</h3>
+<div class="tablewrap"><table>
+  <tr><th>種類</th><th>パス</th><th>状態</th></tr>
+  {% for d in drafts %}<tr><td>{{ d.kind }}</td><td><code>{{ d.path }}</code></td><td>{{ d.status }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+{% if artifacts %}
+<h3>研究の成果物</h3>
+<div class="tablewrap"><table>
+  <tr><th>種類</th><th>パス</th><th>説明</th></tr>
+  {% for a in artifacts %}<tr><td>{{ a.kind }}</td><td><code>{{ a.path }}</code></td><td>{{ a.description or '' }}{% if a.reusable %} <span class="tag">再利用可</span>{% endif %}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+{% if not drafts and not artifacts %}<p class="muted">まだ成果物がありません。</p>{% endif %}
+
+<h2>経過（新しい順・50件）</h2>
+{% if events %}
+<div class="tablewrap"><table>
+  <tr><th>日時</th><th>出来事</th><th>詳細</th></tr>
+  {% for e in events %}<tr><td>{{ e.created_at|dt }}</td><td>{{ e.event }}</td><td class="muted">{{ e.detail|js }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<p class="muted">まだありません。</p>{% endif %}
+{% endblock %}

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>システムの自己評価</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if metrics %}
+<div class="tablewrap"><table>
+  <tr><th>指標</th><th>値</th></tr>
+  {% for k, v in metrics.items() %}<tr><td>{{ k }}</td><td>{{ v|num if v is number else (v if v is not none else '—') }}</td></tr>{% endfor %}
+</table></div>
+{% elif not error %}<p class="muted">指標はまだありません。</p>{% endif %}
+{% endblock %}

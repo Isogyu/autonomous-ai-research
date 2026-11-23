@@ -1,0 +1,117 @@
+# 運用方針。利用者が事前に決めておく判断基準を1か所に集める。
+# 研究の開始時にこのファイル全体の SHA-256 を研究に固定し、途中で書き換えられたら研究を保留にする。
+# 研究エージェントの作業領域（workspaces/）の外にあり、エージェントからは変更できない。
+version: 1
+
+# ---- 論文の収集 ----
+ingest:
+  lookback_days: 2            # 日次収集でさかのぼる日数（取りこぼし対策で重ねる）
+  max_per_query: 60
+  arxiv_categories: [cs.AI, cs.CL, cs.LG, cs.SE, cs.MA, cs.RO]
+  topics:                      # 収集対象の領域。検索語は英語の原語で持つ
+    - {name: AIエージェント, query: "LLM agent"}
+    - {name: AI駆動開発・コーディングエージェント, query: "coding agent software engineering"}
+    - {name: エージェント評価, query: "agent evaluation benchmark"}
+    - {name: マルチエージェント, query: "multi-agent LLM"}
+    - {name: AIハーネス, query: "agent harness scaffold"}
+    - {name: ローカルLLM・SLM, query: "small language model on-device"}
+    - {name: 推論効率化, query: "LLM inference efficiency quantization"}
+    - {name: エッジAI, query: "edge AI deployment language model"}
+    - {name: フィジカルAI・ロボティクス・VLA, query: "vision-language-action robot"}
+    - {name: デジタルツイン, query: "digital twin simulation learning"}
+
+# ---- 価値評価（重みは変更可。合計は自動で正規化する） ----
+scoring:
+  rubric_version: "2026-11"
+  weights:
+    novelty: 1.0               # 技術的新規性
+    credibility: 1.2           # 研究の信頼性
+    delta_vs_prior: 0.8        # 既存技術との差分
+    practical_importance: 1.3  # 実務上の重要性
+    verifiability: 1.5         # 検証可能性
+    local_feasibility: 1.2     # 個人PCでの実行可能性
+    cost: 0.8                  # 費用（安いほど高得点）
+    interpretability: 0.8      # 検証結果の解釈可能性
+    reproducibility: 1.0       # 再現性
+    outreach_value: 0.9        # 技術者への発信価値
+  # 新規性が高くても検証できない研究を高評価にしすぎない
+  caps:
+    - {if_below: {verifiability: 2}, max_total: 55}
+    - {if_below: {local_feasibility: 2}, max_total: 60}
+  # 地味でも実務上重要な研究を取り逃がさない（上位とは別枠で候補に残す）
+  practical_reserve:
+    min_practical_importance: 4
+    min_verifiability: 3
+    slots: 2
+  shortlist_size: 12           # LLM で詳しく評価する件数
+  proposals_per_week: 5
+
+# ---- 研究の実行 ----
+research:
+  default_engine: native       # native / ai_scientist_v3
+  budget_usd: 15.0             # 研究1件の費用上限（従量課金と定額契約の換算額の合計）
+  budget_soft_ratio: 0.8       # ここを超えたら追加実験を止め、保存済みの結果で分析・監査へ進む
+  max_cycles: 3                # 仮説→実験→分析のサイクル数の上限
+  max_wallclock_hours: 12
+  phase_timeout_minutes: 90
+  pilot_max_budget_ratio: 0.15
+  # 追加サイクルを続ける条件（すべて満たすときだけ続行）
+  continue_if:
+    min_expected_information_gain: 0.5   # 研究エージェントの自己評価（0〜1）
+    min_remaining_budget_ratio: 0.3
+  models:
+    implementer: {agent: claude, model: sonnet}
+    planner: {agent: claude, model: opus}
+    scorer: {agent: claude, model: haiku}
+    auditor: {agent: codex, model: ""}       # 空なら Codex の既定モデル
+    fixer: {agent: claude, model: sonnet}
+
+# ---- 品質ゲート（改善担当エージェントは変更できない） ----
+gates:
+  research:
+    max_open_critical: 0
+    max_open_major: 0
+    require_primary_claims_in: [Verified, Supported]   # 主要な主張に必要な判定
+    forbid_claim_status: [Contradicted]
+    require_tests_pass: true
+    require_preregistration_intact: true
+    require_independent_recalculation: true
+    require_auditor_differs_from_implementer: true
+    max_audit_rounds: 3        # 修正と再監査の上限。超えたら公開不可として記録する
+  publication:
+    min_score: 80              # 公開品質監査の点数（100点満点）
+    max_open_critical: 0
+    max_open_major: 0
+    require_no_secrets: true
+    require_limitations_section: true
+    require_reproduction_steps: true
+    require_license: true
+    max_audit_rounds: 2
+
+# ---- 公開（PR の作成と外部公開は別の判断） ----
+publication:
+  create_pull_request: true    # ゲート通過後に PR を自動作成する
+  allowed_remote_visibility: [private]   # ここにない公開範囲のリポジトリへは push しない
+  base_branch: main
+  branch_prefix: research/
+  channels:                    # 発信先。将来 linkedin などを足せる
+    github_pr: {enabled: true, approval: auto_if_gates_pass}
+
+# ---- 安全 ----
+safety:
+  sandbox: seatbelt            # docker / seatbelt / none。最も強い隔離は docker。seatbelt は macOS 用の代替（ADR-0006）
+  docker_image: python:3.12-slim
+  docker_network: none         # 実験コードの実行時はネットワークを切る
+  docker_memory: 2g
+  docker_cpus: 2
+  experiment_timeout_minutes: 30
+  allow_metered_api_in_experiments: false   # 実験コードから従量課金 API を呼ぶことを許すか
+  hold_on:                     # ここに当たる事象は研究を保留にして通知する
+    - budget_exceeded
+    - auth_failure
+    - policy_changed
+    - secret_detected
+    - publish_scope_violation
+
+notify:
+  macos: true                  # macOS の通知センターに出す

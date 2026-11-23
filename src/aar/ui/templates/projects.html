@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>研究一覧</h1>
+<p>
+  <a href="/projects">すべて</a>
+  {% for s in statuses %} ／ <a href="/projects?status={{ s }}">{{ STATUS_LABELS[s] }}</a>{% endfor %}
+</p>
+{% if status_filter %}<p class="muted">絞り込み: {{ STATUS_LABELS[status_filter] }}</p>{% endif %}
+{% if not projects %}<p>該当する研究はありません。</p>{% endif %}
+{% for p in projects %}
+<div class="card">
+  <h3><a href="/projects/{{ p.id }}">{{ p.title }}</a></h3>
+  <p>
+    <span class="tag {% if p.status == 'running' %}ok{% elif p.status == 'failed' %}bad{% elif p.status in ('paused','on_hold') %}warn{% endif %}">{{ STATUS_LABELS.get(p.status, p.status) }}</span>
+    {% if p.execution_mode == 'mock' %}<span class="tag warn">モック</span>{% endif %}
+    工程: {{ p.phase }}
+    {% if p.outcome %} ／ 結果: {{ OUTCOME_LABELS.get(p.outcome, p.outcome) }}{% endif %}
+  </p>
+  <p class="muted">費用: ${{ p.cost_usd|num }} / 上限 ${{ p.budget_usd|num }} ／ 開始: {{ p.started_at|dt or '未開始' }}</p>
+</div>
+{% endfor %}
+{% endblock %}
