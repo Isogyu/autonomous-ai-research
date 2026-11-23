@@ -524,3 +524,23 @@ async def test_fixture_with_injected_major_is_fixed_and_reaudited_without_touchi
     # 元の研究は、リポジトリも DB の記録も変わっていない
     assert workspace.head(src_ws) == src_head and (src_ws / "README.md").read_text(encoding="utf-8") == src_readme
     assert snapshot() == before
+
+
+async def test_project_whose_workflow_died_is_reconciled_as_failed(stack, monkeypatch):
+    """ワークフローが外から終了させられても、DB の状態が「実行中」のまま残らない。動いている研究には触れない。"""
+    from aar import service
+    from aar.db.core import connect, fetch_all
+
+    monkeypatch.setenv("AAR_MOCK_DELAY_S", "3")
+    proposal_id = await _proposal(stack)
+    pid = (await service.select_and_start(proposal_id))["id"]
+    await _wait(pid, ("running",))
+    assert await service.reconcile_projects() == []                        # 動いている研究はそのまま
+    await (await service.get_client()).get_workflow_handle(pid).terminate("テスト")
+    fixed = await service.reconcile_projects()
+    assert fixed == [{"project_id": pid, "workflow_state": "TERMINATED"}]
+    p = await _wait(pid, ("failed",))
+    assert p["outcome"] == "failed" and "[workflow_ended]" in p["outcome_reason"]
+    assert await service.reconcile_projects() == []                        # 2回目は何もしない
+    with connect() as conn:
+        assert len(fetch_all(conn, "SELECT 1 FROM workflow_events WHERE project_id = %s AND event = 'reconciled'", (pid,))) == 1

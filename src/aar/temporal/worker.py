@@ -41,7 +41,19 @@ async def run_worker(*, schedules: bool = True) -> None:
         if started:
             log.info("登録済みの研究を開始: %s", ", ".join(started))
         log.info("ワーカー起動（task queue=%s, mode=%s）", settings.task_queue, settings.mode)
+
+        async def reconcile_loop() -> None:
+            while True:
+                try:
+                    for f in await service.reconcile_projects():
+                        log.warning("ワークフローが終わっていた研究を失敗として確定: %s（%s）", f["project_id"], f["workflow_state"])
+                except Exception as e:  # noqa: BLE001 - 見回りの失敗でワーカーを止めない
+                    log.warning("状態の見回りに失敗: %s", str(e)[:200])
+                await asyncio.sleep(600)
+
+        watcher = asyncio.create_task(reconcile_loop())
         await stop.wait()
+        watcher.cancel()
         log.info("ワーカーを停止する（実行中の工程は Temporal が再開時にやり直す）")
 
 

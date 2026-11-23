@@ -28,6 +28,13 @@ MAX_RATE_LIMIT_WAITS = 12
 MAX_AUTO_RATE_WAITS = 5
 MAX_AUTO_RATE_WAIT = timedelta(hours=8)
 MAX_IMPLEMENT_ATTEMPTS = 3
+# 定期実行は日本時間で動く（service.ensure_schedules の Asia/Tokyo）。日付や週の名前も日本時間で決める。
+# UTC のままだと、朝の実行が「前日」「前週」の名前になり、前回の記録と同じ鍵になってしまう
+LOCAL_UTC_OFFSET = timedelta(hours=9)
+
+
+def local_now() -> Any:
+    return workflow.now() + LOCAL_UTC_OFFSET
 
 
 @dataclass
@@ -356,7 +363,7 @@ class IngestWorkflow:
 
     @workflow.run
     async def run(self, day: str = "") -> dict[str, Any]:
-        day = day or workflow.now().date().isoformat()
+        day = day or local_now().date().isoformat()
         return await workflow.execute_activity(
             "ingest_papers", args=[day], start_to_close_timeout=timedelta(minutes=45),
             heartbeat_timeout=timedelta(minutes=5),
@@ -370,7 +377,7 @@ class ProposalWorkflow:
     @workflow.run
     async def run(self, batch_key: str = "", prefer_public_data: bool = False, paper_ids: list[str] | None = None) -> dict[str, Any]:
         if not batch_key:
-            iso = workflow.now().isocalendar()
+            iso = local_now().isocalendar()
             batch_key = f"{iso.year}-W{iso.week:02d}"
         retry = RetryPolicy(initial_interval=timedelta(minutes=1), maximum_attempts=3)
         if paper_ids:       # 論文を指定した生成（利用者の操作）
