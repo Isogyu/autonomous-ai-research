@@ -29,6 +29,7 @@
 | budget | 研究の費用上限に到達 | 上限を上げる（`aar projects budget`）か、中止する |
 | policy_changed | 方針ファイルが研究の開始後に変わった | 元に戻す |
 | setup | 監査 Skill が置かれていない | Skill を展開する |
+| resource | ディスクの空きが基準（既定 150MB）を下回った | 空きを作る |
 | rate_limit | 利用上限 | 30分ごとに自動で再開を試みる（12回まで） |
 
 ## 理由

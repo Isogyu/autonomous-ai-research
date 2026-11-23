@@ -80,6 +80,7 @@ scripts/aarctl stop           # ワーカー・UI・Temporal を止める（--al
 scripts/aarctl start          # 再開。実行中だった研究は続きから進む
 aar projects pause|resume|cancel <研究ID>
 aar projects budget <研究ID> <ドル>   # 費用上限に達して保留になったとき
+aar projects reopen <研究ID>          # 公開不可で終わった研究を、未対応の指摘の修正と独立監査からやり直す（基準は同じ）
 ```
 
 成果物は `workspaces/<研究ID>/repo/`（研究ごとの Git リポジトリ、ブランチ `research/<研究ID>`）にできる。
