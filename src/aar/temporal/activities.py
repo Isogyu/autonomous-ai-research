@@ -485,14 +485,34 @@ async def publication_audit(project_id: str, round_no: int) -> dict[str, Any]:
             prop = store.get_proposal_for_project(conn, project_id)
         mech = deliv.mechanical_publication_checks(ctx.ws, [prop.get("paper_abstract"), prop.get("body")])
         tests = await native.run_tests(ctx)
-        mech_view = {k: v for k, v in mech.items() if k != "secrets"} | {"secrets": [h["path"] + " / " + h["kind"] for h in mech["secrets"]]}
-        report, res, commit = await pubaudit.run_publication_audit(
-            ctx.runners[choice.agent], model=choice.model, skill_dir=settings.publication_audit_skill_dir, ws=ctx.ws,
-            audit_root=audit_root_of(project_id), round_no=round_no, mech=mech_view | {"tests_passed": tests.ok},
-            prior_issues=[p for p in prior if p["severity"] in ("Critical", "Major")], heartbeat=_beat)
+        mech_view = {k: v for k, v in mech.items() if k != "secrets"} | {
+            "secrets": [h["path"] + " / " + h["kind"] for h in mech["secrets"]],
+            "tests": {"passed": tests.ok, "sandbox": tests.sandbox, "log_tail": tests.tail(1500),
+                      "note": "オーケストレーターが隔離環境で実行した結果（既存のログ）"}}
+        pg = policy.gates.publication
+        skill_dir = settings.publication_audit_skill_dir
+        has_skill = raudit.skill_available(skill_dir)
+        if pg.require_formal_skill and not has_skill:
+            raise hold("setup", f"GitHub 公開品質監査 Skill が {skill_dir} にない。Skill を置いてから再開する"
+                                "（代用の監査では公開品質ゲートを通さない設定になっている）")
+        common = dict(model=choice.model, ws=ctx.ws, audit_root=audit_root_of(project_id), round_no=round_no, mech=mech_view,
+                      prior_issues=[p for p in prior if p["severity"] in ("Critical", "Major")], heartbeat=_beat)
+        if has_skill:
+            report, res, commit = await pubaudit.run_skill_audit(ctx.runners[choice.agent], skill_dir=skill_dir, **common)
+        else:
+            report, res, commit = await pubaudit.run_builtin_audit(ctx.runners[choice.agent], **common)
         ctx.on_cost("公開品質監査", f"{project_id}:audit:publication:{round_no}", res)
         if not res.ok and res.error_kind in ("auth", "rate_limit"):
             raise hold(res.error_kind, f"監査担当を実行できない: {res.error}")
+        if report.status == "failed":
+            # Skill を実行できなかった、または結果が Skill の決まりに合っていない。合格にも不合格にもせず、やり直す。
+            # やり直しても正常な結果が得られなければ、研究は「失敗」として確定する（公開可にはならない）
+            with connect() as conn:
+                store.log_event(conn, project_id, project_id, "publication_audit_invalid",
+                                {"round": round_no, "attempt": _attempt(), "skill": report.skill,
+                                 "problems": report.detail.get("problems", []), "record": report.report_dir})
+            raise ApplicationError("公開品質監査が正常な結果を返さなかった: "
+                                   + "; ".join(map(str, report.detail.get("problems", [])))[:600], type="InvalidAuditResult")
         # 機械的な確認で見つかった問題は、監査担当の採点にかかわらず指摘として残す
         from aar.models import AuditFinding
         if mech["secrets"]:
@@ -521,7 +541,8 @@ async def publication_audit(project_id: str, round_no: int) -> dict[str, Any]:
         return {"passed": gate.passed, "score": report.score, "status": report.status, "skill": report.skill,
                 "blocking": [c.model_dump() for c in gate.blocking()], "checks": [c.model_dump() for c in gate.checks],
                 "n_critical": sum(f.severity == "Critical" for f in report.findings),
-                "n_major": sum(f.severity == "Major" for f in report.findings), "summary": report.summary[:2000]}
+                "n_major": sum(f.severity == "Major" for f in report.findings), "summary": report.summary[:2000],
+                "verdict": report.publication_verdict, "target_commit": commit}
     return await _phase(project_id, "publication_audit", f"audit:publication:{round_no}", run)
 
 

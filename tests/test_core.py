@@ -77,8 +77,9 @@ def test_research_gate_requires_auditor_differs_from_implementer():
 
 
 def test_publication_gate():
-    rep = AuditReport(kind="publication_quality", status="completed", auditor="codex:default", skill="builtin", score=85,
-                      checks={"claims_grounded": True})
+    rep = AuditReport(kind="publication_quality", status="completed", auditor="codex:default", skill="repo-publication-audit@x",
+                      score=85, publication_verdict="A",
+                      checks={"claims_grounded": True, "formal_skill": True, "publication_hold": False})
     args = dict(secrets_found=0, has_limitations=True, has_repro=True, has_license=True, tests_passed=True,
                 claims_grounded=True, pinned_policy_sha="a", current_policy_sha="a")
     assert gates.evaluate_publication_gate(GatePublication(), rep, **args).passed
@@ -361,3 +362,80 @@ def test_check_numbers_accepts_figures_quoted_from_the_source_paper(tmp_path):
     (w / "report/report.md").write_text("論文は成功率が 58.33% から 16.67% に下がったと報告している。\n")
     assert check_numbers(w, ["report/report.md"])
     assert not check_numbers(w, ["report/report.md"], ["utility dropped from 58.33% to 16.67%"])
+
+
+# ------------------------------------------------------------------ 公開品質監査 Skill の結果の検証
+
+
+def _skill_result(**over):
+    from aar.audit.publication import REPORT_SECTIONS, SKILL_FILES, SUB_CAPS
+
+    scores = [{"item": k, "score": cap, "pending": 0, "reason": ""} for k, cap in SUB_CAPS.items()]
+    base = {"skill_files_read": list(SKILL_FILES), "mode": "audit", "head_commit": "a" * 40,
+            "report_markdown": "\n".join(f"## {s}" for s in REPORT_SECTIONS), "scores": scores, "total_confirmed": 100,
+            "total_pending": 0, "github_verdict": "A", "publication_hold": False, "linkedin_verdict": "投稿可",
+            "issues": [], "tests_executed_by_auditor": False}
+    return base | over
+
+
+def test_skill_result_validation_accepts_a_consistent_result():
+    from aar.audit.publication import SKILL_FILES, validate_skill_result
+
+    assert validate_skill_result(_skill_result(), commit="a" * 40, execution_log=None) == []
+    log = " ".join(f"cat /x/{f}" for f in SKILL_FILES)
+    assert validate_skill_result(_skill_result(), commit="a" * 40, execution_log=log) == []
+
+
+@pytest.mark.parametrize("over,word", [
+    ({"github_verdict": "A", "issues": [{"severity": "Critical"}]}, "Critical"),
+    ({"github_verdict": "B", "issues": [{"severity": "Major"}]}, "Major"),
+    ({"github_verdict": "B", "publication_hold": True}, "公開保留"),
+    ({"total_confirmed": 97}, "検算"),
+    ({"head_commit": "b" * 40}, "コミット"),
+    ({"report_markdown": "## 結論"}, "節"),
+    ({"skill_files_read": ["SKILL.md"]}, "読んだ"),
+    ({"mode": "improve"}, "モード"),
+    ({"tests_executed_by_auditor": True}, "テスト"),
+    ({"github_verdict": "E"}, "A〜D"),
+])
+def test_skill_result_validation_rejects_results_that_break_the_skill_rules(over, word):
+    from aar.audit.publication import validate_skill_result
+
+    problems = validate_skill_result(_skill_result(**over), commit="a" * 40, execution_log=None)
+    assert problems and any(word in p for p in problems), problems
+
+
+def test_skill_result_validation_checks_score_ranges_and_execution_log():
+    from aar.audit.publication import SUB_CAPS, validate_skill_result
+
+    r = _skill_result()
+    r["scores"][0] = {"item": "rv_purpose", "score": 6, "pending": 0, "reason": ""}      # 上限 5 を超える
+    assert any("範囲外" in p for p in validate_skill_result(r, commit="a" * 40, execution_log=None))
+    r = _skill_result()
+    r["scores"] = r["scores"][1:]
+    assert any("採点がない" in p for p in validate_skill_result(r, commit="a" * 40, execution_log=None))
+    # 自己申告では読んだことになっていても、実行ログに記録がなければ認めない
+    assert any("実行ログ" in p for p in validate_skill_result(_skill_result(), commit="a" * 40, execution_log="cat SKILL.md"))
+    assert len(SUB_CAPS) == 21 and sum(SUB_CAPS.values()) == 100
+
+
+def test_publication_gate_requires_formal_skill_and_its_verdict():
+    args = dict(secrets_found=0, has_limitations=True, has_repro=True, has_license=True, tests_passed=True,
+                claims_grounded=True, pinned_policy_sha="a", current_policy_sha="a")
+
+    def rep(**kw):
+        base = dict(kind="publication_quality", status="completed", auditor="codex:default", skill="repo-publication-audit@x",
+                    score=90, publication_verdict="B", checks={"formal_skill": True, "claims_grounded": True, "publication_hold": False})
+        return AuditReport(**(base | kw))
+
+    gate = GatePublication()
+    assert gates.evaluate_publication_gate(gate, rep(), **args).passed
+    assert not gates.evaluate_publication_gate(gate, rep(publication_verdict="C"), **args).passed
+    hold = rep(checks={"formal_skill": True, "claims_grounded": True, "publication_hold": True})
+    assert not gates.evaluate_publication_gate(gate, hold, **args).passed
+    # 代用の監査は、点数や判定が良くても通らない
+    substitute = rep(skill="builtin-checklist（代用。利用者の Skill ではない）", score=99, publication_verdict="A",
+                     checks={"formal_skill": False, "claims_grounded": True})
+    r = gates.evaluate_publication_gate(gate, substitute, **args)
+    assert not r.passed and any("正式な公開品質監査 Skill" in c.name for c in r.blocking())
+    assert gates.evaluate_publication_gate(GatePublication(require_formal_skill=False), substitute, **args).passed

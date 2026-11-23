@@ -86,6 +86,9 @@ gates:
     require_limitations_section: true
     require_reproduction_steps: true
     require_license: true
+    require_formal_skill: true # 利用者の公開品質監査 Skill（skills/repo-publication-audit）による監査を必須にする。
+                               # 無い・実行できない・結果が正常でない場合は、合格にしない
+    accept_verdicts: [A, B]    # Skill の公開判定のうち、公開候補にしてよいもの（A: 公開推奨、B: 軽微な改善後に公開可）
     max_audit_rounds: 2
 
 # ---- 公開（PR の作成と外部公開は別の判断） ----

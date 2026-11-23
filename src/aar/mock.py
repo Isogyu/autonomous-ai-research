@@ -138,6 +138,10 @@ def _claude(prompt: str, cwd: Path, schema: dict[str, Any] | None) -> dict[str, 
             _files(cwd, {"experiments/analyze.py": ANALYZE_FIXED})
             return {"fixed": [{"issue_id": "I001", "what_changed": "処置群の全試行で平均を計算するよう修正"}], "not_fixed": [],
                     "needs_rerun": True}
+        readme = cwd / "README.md"
+        if readme.exists() and "## 引用" not in readme.read_text(encoding="utf-8"):
+            readme.write_text(readme.read_text(encoding="utf-8") + "\n## 引用\n\n（モック）原論文の書誌。\n", encoding="utf-8")
+            return {"fixed": [{"issue_id": "P101", "what_changed": "README に引用の節を追加"}], "not_fixed": [], "needs_rerun": False}
         return {"fixed": [], "not_fixed": [], "needs_rerun": False}
     if "files_written" in props:   # 成果物
         body = "\n\n".join(f"## {s}\n\n（モック）{s}の内容。" + ("\n\n<!-- AAR:RESULTS -->\n\n<!-- AAR:FIGURES -->" if s == "実験結果" else "")
@@ -182,7 +186,7 @@ def _recompute(target: Path) -> tuple[float | None, float | None]:
 
 def _codex(prompt: str, cwd: Path, schema: dict[str, Any] | None) -> dict[str, Any] | AgentResult:
     props = set((schema or {}).get("properties", {}))
-    m = re.search(r"複製\S*\s*`([^`]+)`|監査対象（読み取り専用の複製）: `([^`]+)`", prompt)
+    m = re.search(r"複製\S*\s*`([^`]+)`|監査対象（読み取り専用の複製）: `([^`]+)`|呼び出し引数は `audit ([^`]+)`", prompt)
     target = Path(next(g for g in m.groups() if g)) if m else cwd
     if "audit_status" in props:
         original, independent = _recompute(target)
@@ -216,12 +220,55 @@ def _codex(prompt: str, cwd: Path, schema: dict[str, Any] | None) -> dict[str, A
                 "independent_recalculation_done": independent is not None, "data_leak_found": False,
                 "summary": "（モック）生データからの再計算は" + ("分析結果と一致した。" if match else "分析結果と一致しなかった。"),
                 "not_tested": ["統計手法の妥当性（モックでは確かめていない）"]}
+    if "github_verdict" in props:
+        return _formal_publication_audit(target)
     if "scores" in props:
         return {"scores": {"research_validity": 22, "reproducibility": 18, "code_quality": 13, "security": 14,
                            "documentation": 9, "credibility": 8, "outreach": 4},
                 "issues": [], "claims_grounded": True, "measured_vs_assumed_distinguished": True,
                 "summary": "（モック）公開品質の確認", "not_checked": ["実際の内容（モック）"]}
     return AgentResult(ok=False, agent="codex", model="mock", error="モックの台本にない呼び出し", error_kind="other")
+
+
+def _formal_publication_audit(target: Path) -> dict[str, Any]:
+    """公開品質監査 Skill の結果の形をまねる。README に引用の節がなければ Major の指摘を出す。
+
+    環境変数 AAR_MOCK_PUB で、正常でない結果を返させることができる（異常系のテスト用）。
+      inconsistent: Critical の指摘があるのに判定 A / bad_sum: 合計の検算が合わない / wrong_commit: 対象コミットが違う
+    """
+    import os
+    import subprocess
+
+    from aar.audit.publication import REPORT_SECTIONS, SKILL_FILES, SUB_CAPS
+
+    fault = os.environ.get("AAR_MOCK_PUB", "")
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=target, capture_output=True, text=True).stdout.strip()
+    readme = (target / "README.md").read_text(encoding="utf-8") if (target / "README.md").exists() else ""
+    missing_citation = "## 引用" not in readme
+    scores = [{"item": k, "score": cap - (1 if k in ("rp_logs", "cr_sources") else 0), "pending": 1 if k == "rp_logs" else 0,
+               "reason": "（モック）"} for k, cap in SUB_CAPS.items()]
+    if missing_citation:
+        next(s for s in scores if s["item"] == "cr_sources")["score"] = 2
+    issues = []
+    if missing_citation:
+        issues.append({"id": "P101", "severity": "Major", "certainty": "確認済み", "location": "README.md",
+                       "evidence": "引用の節がない", "impact": "原論文への帰属が示されていない", "proposed_fix": "引用の節を追加する",
+                       "blocks_publication": True, "changes_research_content": False})
+    verdict = "C" if issues else "A"
+    if fault == "inconsistent":
+        issues.append({"id": "P199", "severity": "Critical", "certainty": "確認済み", "location": "x", "evidence": "x",
+                       "impact": "x", "proposed_fix": "x", "blocks_publication": True, "changes_research_content": False})
+        verdict = "A"
+    total = sum(s["score"] for s in scores)
+    return {
+        "skill_files_read": list(SKILL_FILES), "mode": "audit", "head_commit": "0" * 40 if fault == "wrong_commit" else head,
+        "report_markdown": "# 公開品質監査（モック）\n\n" + "\n\n".join(f"## {s}\n\n（モック）" for s in REPORT_SECTIONS),
+        "scores": scores, "total_confirmed": total + (3 if fault == "bad_sum" else 0), "total_pending": 1,
+        "github_verdict": verdict, "verdict_reason": "（モック）", "publication_hold": False,
+        "linkedin_verdict": "修正・確認後に可" if issues else "投稿可", "main_claims_supported": True, "issues": issues,
+        "unchecked_scope": ["（モック）Git の履歴の全件"], "linkedin_claims": [{"claim": "（モック）", "evidence": "x", "caveats": "x"}],
+        "claims_to_avoid": ["（モック）一般化"], "recommendations": ["（モック）"], "tests_executed_by_auditor": False,
+    }
 
 
 def mock_runners() -> dict[str, MockRunner]:
