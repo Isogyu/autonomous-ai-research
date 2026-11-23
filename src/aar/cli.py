@@ -101,10 +101,14 @@ def ingest(day: Annotated[str, typer.Argument(help="対象日（YYYY-MM-DD）。
 
 
 @proposals_app.command("generate")
-def proposals_generate() -> None:
+def proposals_generate(
+    batch: Annotated[str, typer.Option(help="企画のまとまりの名前（省略すると今週）")] = "",
+    paper: Annotated[list[str] | None, typer.Option(help="企画を作る論文の ID（複数可）。省略すると価値評価の上位から選ぶ")] = None,
+    public_data: Annotated[bool, typer.Option(help="公開データセット（config/datasets.yaml）を使う企画にする")] = False,
+) -> None:
     """検証企画を今すぐ生成する。"""
     from aar import service
-    _print(asyncio.run(service.run_now("proposals")))
+    _print(asyncio.run(service.run_now("proposals", batch, prefer_public_data=public_data, paper_ids=paper)))
 
 
 @proposals_app.command("list")

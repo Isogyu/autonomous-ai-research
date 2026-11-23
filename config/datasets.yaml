@@ -1,0 +1,54 @@
+# 公開データセットのカタログ。企画と研究設計の担当に「実在し、取得でき、利用条件が明確なデータ」として示す。
+# ここに無いデータも設計に書けるが、取得できなければ設計のやり直しになる。
+# 載せる条件: 方針（config/policy.yaml の safety.dataset_hosts）で許したホストにあり、ライセンスが明示され、
+# 個人を特定する情報を含まず、200MB 以下。URL と利用条件は verified の日付に確認した。
+# この一覧は品質ゲートの基準ではない（方針ファイルのハッシュの対象外）。
+datasets:
+  - name: SMS Spam Collection
+    url: https://archive.ics.uci.edu/static/public/228/sms+spam+collection.zip
+    filename: sms_spam_collection.zip
+    license: CC BY 4.0
+    source: "UCI Machine Learning Repository（Almeida & Hidalgo, 2011. DOI 10.24432/C5CC84）"
+    task: テキストの二値分類（ham / spam）。5,574 件の SMS。似た文面の重複が多いことが知られている
+    format: zip の中にタブ区切りのテキスト（ラベル<TAB>本文）
+    verified: 2026-11-24
+  - name: Spambase
+    url: https://archive.ics.uci.edu/static/public/94/spambase.zip
+    filename: spambase.zip
+    license: CC BY 4.0
+    source: "UCI Machine Learning Repository（Hopkins et al., 1999. DOI 10.24432/C53G6X）"
+    task: 表形式の二値分類（メールがスパムか）。4,601 件、数値の特徴量 57 個
+    format: zip の中に CSV（ヘッダーなし）と列名のファイル
+    verified: 2026-11-24
+  - name: Adult (Census Income)
+    url: https://archive.ics.uci.edu/static/public/2/adult.zip
+    filename: adult.zip
+    license: CC BY 4.0
+    source: "UCI Machine Learning Repository（Becker & Kohavi, 1996. DOI 10.24432/C5XW20）"
+    task: 表形式の二値分類（年収が 5 万ドルを超えるか）。約 48,000 件、数値とカテゴリの特徴量 14 個。学習用と評価用の分割が付属
+    format: zip の中に CSV（ヘッダーなし）と列の説明
+    verified: 2026-11-24
+  - name: Bank Marketing
+    url: https://archive.ics.uci.edu/static/public/222/bank+marketing.zip
+    filename: bank_marketing.zip
+    license: CC BY 4.0
+    source: "UCI Machine Learning Repository（Moro, Rita & Cortez, 2014. DOI 10.24432/C5K306）"
+    task: 表形式の二値分類（定期預金を申し込むか）。約 45,000 件。通話時間の列は結果が分かった後の情報で、予測に使うと情報の混入になることが知られている
+    format: zip の中にさらに zip があり、その中にセミコロン区切りの CSV
+    verified: 2026-11-24
+  - name: Wine Quality
+    url: https://archive.ics.uci.edu/static/public/186/wine+quality.zip
+    filename: wine_quality.zip
+    license: CC BY 4.0
+    source: "UCI Machine Learning Repository（Cortez et al., 2009. DOI 10.24432/C56S3T）"
+    task: 表形式の回帰・順序分類（ワインの品質の評点）。赤 1,599 件・白 4,898 件、数値の特徴量 11 個
+    format: zip の中にセミコロン区切りの CSV が2つ
+    verified: 2026-11-24
+  - name: Breast Cancer Wisconsin (Diagnostic)
+    url: https://archive.ics.uci.edu/static/public/17/breast+cancer+wisconsin+diagnostic.zip
+    filename: breast_cancer_wisconsin_diagnostic.zip
+    license: CC BY 4.0
+    source: "UCI Machine Learning Repository（Wolberg et al., 1993. DOI 10.24432/C5DW2B）"
+    task: 表形式の二値分類（良性 / 悪性）。569 件、数値の特徴量 30 個
+    format: zip の中に CSV（ヘッダーなし）と説明
+    verified: 2026-11-24

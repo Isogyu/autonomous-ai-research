@@ -196,7 +196,7 @@ PROPOSAL_SCHEMA = {
 
 def proposal_prompt(paper: dict[str, Any], score: dict[str, Any], memory_context: str, track_record: str,
                     budget_usd: float, packages: list[str], fulltext: str | None = None,
-                    dataset_hosts: list[str] | None = None) -> str:
+                    dataset_hosts: list[str] | None = None, *, prefer_public_data: bool = False) -> str:
     meta = (f"題名: {paper['title']}\n公開日: {paper.get('published_at')}\narXiv: {paper.get('arxiv_id')}\n"
             f"DOI: {paper.get('doi')}\n\n要旨:\n{paper.get('abstract')}")
     if fulltext:
@@ -206,6 +206,14 @@ def proposal_prompt(paper: dict[str, Any], score: dict[str, Any], memory_context
     hosts = "、".join(dataset_hosts or [])
     data_rule = (f"データは実験コードで生成するか、次のホストから直接ダウンロードできる小さな公開データ（ライセンスが明確なもの）に限る: {hosts}。"
                  if hosts else "データは実験コードで生成するものに限る。")
+    from aar import datasets as ds
+    catalog = ds.catalog_text(ds.load_catalog(), dataset_hosts or [])
+    if catalog:
+        data_rule += "\n- 取得できることを確認済みの公開データ（使う場合は、名前を datasets に書く）:\n" + catalog
+    if prefer_public_data:
+        data_rule += ("\n- この企画は、上の公開データのうち少なくとも1つを、主要な仮説の検証に使うことが条件である"
+                      "（合成データだけの企画にしない）。論文の問いに合う公開データが無ければ feasible を false にする。"
+                      "データそのものを見ずに立てる企画なので、仮説はデータの形式に依存しすぎない形にする。")
     return f"""次の論文をもとに、個人が実行できる「検証企画」を1つ作る。論文の再現ではなく、
 論文の主張や考え方のうち、小さな実験で確かめられる問いを取り出す。
 

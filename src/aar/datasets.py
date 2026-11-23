@@ -191,3 +191,79 @@ def copy_external_data(ws: Path, dest: Path) -> None:
     src = ws / EXTERNAL_DIR
     if src.exists():
         shutil.copytree(src, dest / EXTERNAL_DIR, dirs_exist_ok=True)
+
+
+# ---------------------------------------------------------------------- カタログと下見
+
+
+def load_catalog(path: Path | None = None) -> list[dict[str, Any]]:
+    """公開データセットのカタログ（config/datasets.yaml）。無ければ空。"""
+    import yaml
+
+    from aar.config import PROJECT_ROOT
+    path = path or PROJECT_ROOT / "config" / "datasets.yaml"
+    if not path.exists():
+        return []
+    return list((yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("datasets") or [])
+
+
+def catalog_text(catalog: list[dict[str, Any]], allowed_hosts: list[str]) -> str:
+    """担当に見せるカタログ（許可されたホストのものだけ）。"""
+    rows = []
+    for d in catalog:
+        if not host_allowed(urlparse(str(d.get("url", ""))).hostname or "", allowed_hosts):
+            continue
+        rows.append(f"- {d['name']}: {d.get('task', '')}\n  url: {d['url']} / filename: {d.get('filename', '')} / "
+                    f"license: {d.get('license', '')} / source: {d.get('source', '')} / 形式: {d.get('format', '')}")
+    return "\n".join(rows)
+
+
+def _head_lines(data: bytes, n: int = 6, width: int = 240) -> tuple[list[str], int] | None:
+    if b"\x00" in data[:2000]:
+        return None
+    text = data.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    return [line[:width] for line in lines[:n]], len(lines)
+
+
+def preview_files(ws: Path, files: list[dict[str, Any]], max_members: int = 8) -> str:
+    """取得したデータの形式の下見（ファイルの一覧、行数、先頭の数行）。設計を確定する前に担当に見せる。
+
+    中身は第三者のデータなので、担当に渡すときは <untrusted_data> で囲み、リポジトリにはコミットしない。
+    """
+    import io
+    import zipfile
+
+    out: list[str] = []
+
+    def describe(name: str, data: bytes, depth: int = 0) -> None:
+        pad = "  " * depth
+        if name.lower().endswith(".zip") and depth < 2:
+            try:
+                z = zipfile.ZipFile(io.BytesIO(data))
+            except zipfile.BadZipFile:
+                out.append(f"{pad}- {name}: zip として読めない")
+                return
+            infos = [i for i in z.infolist() if not i.is_dir()]
+            out.append(f"{pad}- {name}: zip（{len(infos)} ファイル）")
+            for i in infos[:max_members]:
+                if i.file_size > 60_000_000:
+                    out.append(f"{pad}  - {i.filename}: {i.file_size:,} バイト（大きいので中は見ていない）")
+                    continue
+                describe(i.filename, z.read(i), depth + 1)
+            if len(infos) > max_members:
+                out.append(f"{pad}  - （ほか {len(infos) - max_members} ファイル）")
+            return
+        head = _head_lines(data)
+        if head is None:
+            out.append(f"{pad}- {name}: {len(data):,} バイト（バイナリ）")
+            return
+        lines, total = head
+        out.append(f"{pad}- {name}: {len(data):,} バイト、{total:,} 行。先頭:")
+        out.extend(f"{pad}    {line}" for line in lines)
+
+    for f in files:
+        p = ws / EXTERNAL_DIR / f["filename"]
+        if p.exists():
+            describe(f["filename"], p.read_bytes())
+    return "\n".join(out)

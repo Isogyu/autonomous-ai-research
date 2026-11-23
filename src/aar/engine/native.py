@@ -172,6 +172,16 @@ async def understand(ctx: Ctx, proposal: dict[str, Any], memory_context: str, fu
 async def design(ctx: Ctx, proposal: dict[str, Any], understanding: dict[str, Any], cycle: int,
                  previous: dict[str, Any] | None, memory_context: str, dataset_feedback: str = "") -> dict[str, Any]:
     """Phase B: 研究設計。返した内容がそのまま事前登録になる。"""
+    from aar import datasets as ds
+
+    catalog = ds.catalog_text(ds.load_catalog(), ctx.policy.safety.dataset_hosts)
+    if (proposal.get("body") or {}).get("requires_public_data"):
+        data_choice = ("この企画は公開データを使うことが条件である。datasets に、取得できる公開データを少なくとも1つ書き、"
+                       "主要な仮説の検証をそのデータで行う（合成データだけの設計にしない）。")
+    else:
+        data_choice = "公開データを使うことで問いに良く答えられる場合だけ使い、合成データで足りるなら無理に使わない。"
+    catalog_block = (f"\n  取得できることを確認済みの公開データ（ここから選ぶと確実。ほかのデータも書けるが、取得できなければ設計をやり直す）:\n{catalog}"
+                     if catalog else "")
     prev = ""
     if previous:
         prev = ("\n## 前のサイクルの結果と、次に検証すると決めたこと\n" + json.dumps(previous, ensure_ascii=False, indent=2, default=str) +
@@ -200,7 +210,9 @@ async def design(ctx: Ctx, proposal: dict[str, Any], understanding: dict[str, An
   オーケストレーターが実験の前に取得して `data/external/<filename>` に置く。取得できるのは次のホストだけ:
   {", ".join(ctx.policy.safety.dataset_hosts) or "（なし。外部データは使えない）"}。1ファイル {ctx.policy.safety.dataset_max_mb}MB まで。圧縮ファイルは展開されない。
   実在を確信できない URL を書かない。ライセンスが分からないデータ、利用条件が研究用途を許さないデータは使わない。
-  公開データを使うことで問いに良く答えられる場合だけ使い、合成データで足りるなら無理に使わない。{dataset_feedback}
+  {data_choice}{catalog_block}
+- 公開データを使う場合は、data_split に「どの単位で、どの比率で、どのシードで分けるか」と、重複や同じ出所の標本が
+  学習側と評価側にまたがらないようにする方法を書く。primary_metric には指標の定義を書く。{dataset_feedback}
 - 仮説のラベルは H1, H2, ... とする。サイクル {cycle} の設計である。
 """
     res = await ctx.ask("planner", "研究設計", f"{ctx.project_id}:design:{cycle}", prompt, schema=DESIGN_SCHEMA, budget=2.0)
@@ -224,6 +236,10 @@ async def implement(ctx: Ctx, prereg: dict[str, Any], cycle: int, attempt: int, 
 ## 守ること
 - `prereg/` 以下のファイルは変更しない（変更すると研究は無効になる）。
 - 事前登録から外れる必要が生じたら、勝手に変えずに deviations_from_prereg に理由つきで書く。
+- 事前登録に dataset_manifest があれば、外部データは `data/external/<filename>` に取得済みである（実験の実行時も同じ場所にある。
+  ネットワークは使えない）。形式の下見が `data/external/PREVIEW.md` にあるので、読んでから実装する。圧縮ファイルは
+  実験コードの中で標準ライブラリを使って読む（展開したファイルを `data/external/` に書かない。結果は `results/` に書く）。
+  外部データが無いときに合成データへ黙って切り替える処理を書かない（無ければ明確なエラーにする）。
 - あなたはコードを実行できない。実行はオーケストレーターが行い、失敗したらログが返ってくる。
 - 既存のファイルがあれば読んでから直す。サイクル {cycle} の出力先は `results/cycle{cycle}/` 以下。
 """

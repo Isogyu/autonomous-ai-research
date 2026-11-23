@@ -225,12 +225,13 @@ async def ensure_schedules() -> list[str]:
     return created
 
 
-async def run_now(kind: str, arg: str = "") -> dict[str, Any]:
+async def run_now(kind: str, arg: str = "", *, prefer_public_data: bool = False, paper_ids: list[str] | None = None) -> dict[str, Any]:
     """収集または企画生成を今すぐ1回実行して結果を待つ。"""
     client = await get_client()
     wf = {"ingest": "IngestWorkflow", "proposals": "ProposalWorkflow"}[kind]
     stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S")
-    return await client.execute_workflow(wf, arg, id=f"aar-{kind}-manual-{stamp}", task_queue=get_settings().task_queue,
+    args: list[Any] = [arg, prefer_public_data, paper_ids] if kind == "proposals" and (prefer_public_data or paper_ids) else [arg]
+    return await client.execute_workflow(wf, args=args, id=f"aar-{kind}-manual-{stamp}", task_queue=get_settings().task_queue,
                                          execution_timeout=timedelta(hours=3))
 
 

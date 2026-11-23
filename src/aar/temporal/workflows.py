@@ -368,19 +368,22 @@ class ProposalWorkflow:
     """週次の検証企画の生成。"""
 
     @workflow.run
-    async def run(self, batch_key: str = "") -> dict[str, Any]:
+    async def run(self, batch_key: str = "", prefer_public_data: bool = False, paper_ids: list[str] | None = None) -> dict[str, Any]:
         if not batch_key:
             iso = workflow.now().isocalendar()
             batch_key = f"{iso.year}-W{iso.week:02d}"
         retry = RetryPolicy(initial_interval=timedelta(minutes=1), maximum_attempts=3)
-        papers: list[str] = await workflow.execute_activity(
-            "select_candidates", args=[batch_key], start_to_close_timeout=timedelta(minutes=60),
-            heartbeat_timeout=timedelta(minutes=5), retry_policy=retry)
+        if paper_ids:       # 論文を指定した生成（利用者の操作）
+            papers: list[str] = list(paper_ids)
+        else:
+            papers = await workflow.execute_activity(
+                "select_candidates", args=[batch_key], start_to_close_timeout=timedelta(minutes=60),
+                heartbeat_timeout=timedelta(minutes=5), retry_policy=retry)
         created, skipped = 0, []
         for pid in papers:
             try:
                 r = await workflow.execute_activity(
-                    "generate_proposal", args=[batch_key, pid], start_to_close_timeout=timedelta(minutes=15),
+                    "generate_proposal", args=[batch_key, pid, prefer_public_data], start_to_close_timeout=timedelta(minutes=15),
                     heartbeat_timeout=timedelta(minutes=3), retry_policy=retry)
                 if r.get("created"):
                     created += 1
