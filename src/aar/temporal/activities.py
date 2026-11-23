@@ -73,7 +73,7 @@ def _policy_for(project: dict[str, Any]) -> Policy:
     policy = load_policy()
     if policy.sha256 != project["policy_sha256"]:
         raise hold("policy_changed", "品質ゲートを含む方針ファイル（config/policy.yaml）が研究の開始後に変更された。"
-                                     "意図した変更なら研究の中止と再登録、意図しない変更なら元に戻して再開する")
+                                     "意図しない変更なら元に戻して再開する。意図した変更なら `aar projects adopt-policy` で現在の方針に固定し直してから再開する")
     return policy
 
 

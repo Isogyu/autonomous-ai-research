@@ -195,6 +195,10 @@ async def test_policy_change_puts_project_on_hold_until_restored(stack):
     assert project["policy_sha256"] == pinned
     p = await _wait(pid, ("on_hold", "completed", "failed"))
     assert p["status"] == "on_hold" and "policy_changed" in p["outcome_reason"]
+    # 再開しただけでは、方針が違うままなのでまた保留になる
+    await service.control_project(pid, "resume")
+    await asyncio.sleep(3)
+    assert (await _wait(pid, ("on_hold", "completed", "failed")))["status"] == "on_hold"
     stack["policy"].write_text(original, encoding="utf-8")
     await service.control_project(pid, "resume")
     p = await _wait(pid, ("completed", "failed"))
@@ -202,6 +206,30 @@ async def test_policy_change_puts_project_on_hold_until_restored(stack):
     with connect() as conn:
         kinds = [r["event"] for r in fetch_all(conn, "SELECT event FROM workflow_events WHERE project_id = %s ORDER BY id", (pid,))]
     assert "on_hold" in kinds and "resumed" in kinds
+    with pytest.raises(ValueError):
+        service.adopt_policy(pid)                       # 保留中でない研究の方針は固定し直せない
+
+
+async def test_intended_policy_change_can_be_adopted_explicitly(stack):
+    """方針を意図して変えた場合は、人が明示的に取り込んでから再開する。前後のハッシュが記録に残る。"""
+    from aar import service
+    from aar.config import load_policy
+    from aar.db.core import connect, fetch_one
+
+    proposal_id = await _proposal(stack)
+    original = stack["policy"].read_text(encoding="utf-8")
+    old = load_policy().sha256
+    project = await _select_with_tampered_policy(stack, proposal_id, original.replace("max_open_major: 0", "max_open_major: 0  # 注記"))
+    pid = project["id"]
+    assert (await _wait(pid, ("on_hold", "completed", "failed")))["status"] == "on_hold"
+    out = service.adopt_policy(pid)
+    assert out["from"] == old and out["to"] == load_policy().sha256 != old
+    await service.control_project(pid, "resume")
+    p = await _wait(pid, ("completed", "failed"))
+    assert p["outcome"] == "publishable", p["outcome_reason"]
+    with connect() as conn:
+        rec = fetch_one(conn, "SELECT detail FROM human_interventions WHERE project_id = %s AND kind = 'adopt_policy'", (pid,))
+    assert rec["detail"] == {"from": old, "to": out["to"]}
 
 
 async def _select_with_tampered_policy(stack, proposal_id: str, original: str) -> dict:
@@ -213,8 +241,9 @@ async def _select_with_tampered_policy(stack, proposal_id: str, original: str) -
     with connect() as conn:
         project = store.select_proposal(conn, proposal_id, budget_usd=5, policy_sha256=policy.sha256, engine="native",
                                         execution_mode="mock")
-    # 登録のあと、開始の前に基準を緩める
-    stack["policy"].write_text(original.replace("max_open_major: 0", "max_open_major: 99"), encoding="utf-8")
+    # 登録のあと、開始の前に方針を書き換える（渡された内容が元と同じなら、基準を緩める書き換えにする）
+    changed = original.replace("max_open_major: 0", "max_open_major: 99") if original == stack["policy"].read_text(encoding="utf-8") else original
+    stack["policy"].write_text(changed, encoding="utf-8")
     from aar import service
     await service.start_workflow_for(await service.get_client(), project)
     return project

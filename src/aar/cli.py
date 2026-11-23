@@ -216,6 +216,13 @@ def projects_reopen(
     _print(asyncio.run(service.reopen_project(project_id, from_=from_, adopt_current_policy=adopt_current_policy)))
 
 
+@projects_app.command("adopt-policy")
+def projects_adopt_policy(project_id: str) -> None:
+    """方針の変更で保留になった研究を、現在の方針に固定し直す（記録に残る）。そのあと resume で再開する。"""
+    from aar import service
+    _print(service.adopt_policy(project_id))
+
+
 @projects_app.command("budget")
 def projects_budget(project_id: str, budget_usd: float) -> None:
     """費用上限を変える（保留からの再開前に使う）。"""

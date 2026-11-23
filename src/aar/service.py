@@ -165,6 +165,25 @@ async def reopen_project(project_id: str, *, from_: str = "audit", adopt_current
     return {"project_id": project_id, "workflow_id": workflow_id, "from": from_, **r}
 
 
+def adopt_policy(project_id: str) -> dict[str, str]:
+    """保留中の研究を、現在の方針ファイルに固定し直す（方針を意図して変えた場合の、人の判断としての取り込み）。
+
+    対象は「方針の変更」で保留になっている研究だけ。前後のハッシュを人の介入として記録する。
+    このあと resume で再開する。エージェントからは呼べない（CLI からの操作だけ）。
+    """
+    policy = load_policy()
+    with connect() as conn:
+        p = store.get_project(conn, project_id)
+        if p["status"] != "on_hold" or "[policy_changed]" not in (p["outcome_reason"] or ""):
+            raise ValueError("方針の変更で保留になっている研究だけが対象")
+        from psycopg.types.json import Jsonb
+        conn.execute("INSERT INTO human_interventions (project_id, kind, detail) VALUES (%s, 'adopt_policy', %s)",
+                     (project_id, Jsonb({"from": p["policy_sha256"], "to": policy.sha256})))
+        store.set_project(conn, project_id, policy_sha256=policy.sha256)
+        store.log_event(conn, project_id, p["workflow_id"], "policy_adopted", {"from": p["policy_sha256"], "to": policy.sha256})
+    return {"from": p["policy_sha256"], "to": policy.sha256}
+
+
 async def control_project(project_id: str, action: str) -> None:
     if action not in ("pause", "resume", "cancel"):
         raise ValueError(f"未知の操作: {action}")
