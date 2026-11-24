@@ -83,13 +83,23 @@ def scrub_history(ws: Path, paths: list[str]) -> dict[str, Any]:
     return {"paths": paths, "head_before": before, "head_after": wsmod.head(ws)}
 
 
-def clone_project(src_id: str, *, scrub: bool = False) -> dict[str, Any]:
-    """完了した研究を、検証用として複製する。複製の研究 ID などを返す。
+def clone_project(src_id: str, *, scrub: bool = False, purpose: str = "fixture") -> dict[str, Any]:
+    """完了した研究を複製する。複製の研究 ID などを返す。元の研究は読むだけで、変更しない。
 
-    scrub を指定すると、複製の履歴から「過去のコミットにだけ残る第三者の文章」のファイルを取り除く。
+    purpose="fixture": 検証用（題名に印を付ける。意図した不具合を入れてよいのは、この複製だけ）。
+    purpose="public": 公開用。元の研究の履歴に、いまの基準では公開できないもの（原論文の要旨の写し）が残っている場合に、
+    原本を残したまま、履歴から取り除いた独立の複製を作る。取り除いたあとの全履歴を検査し、違反が残れば失敗させる。
+    コミットの新旧の対応は、リポジトリの外（非公開）に残し、DB の事前登録のコミットの記録も新しいほうに合わせる。
+
+    scrub を指定すると、複製の履歴から「過去のコミットにだけ残る第三者の文章」のファイルを取り除く（public では常に行う）。
     """
+    if purpose not in ("fixture", "public"):
+        raise ValueError(f"purpose は fixture か public: {purpose}")
+    public = purpose == "public"
+    scrub = scrub or public
+    mark = "" if public else MARK
     settings, policy = get_settings(), load_policy()
-    new_id = f"FX-{datetime.now(UTC):%Y%m%d}-{secrets.token_hex(3)}"
+    new_id = f"{'PC' if public else 'FX'}-{datetime.now(UTC):%Y%m%d}-{secrets.token_hex(3)}"
     src_ws, new_root = settings.workspaces_dir / src_id, settings.workspaces_dir / new_id
     with connect() as conn:
         src = store.get_project(conn, src_id)
@@ -112,11 +122,22 @@ def clone_project(src_id: str, *, scrub: bool = False) -> dict[str, Any]:
         wsmod.git(ws, "checkout", "-q", "-B", branch, f"origin/{src_branch}", check=False)
         wsmod.git(ws, "checkout", "-q", "-B", branch, check=False)
         for tag in wsmod.git(src_ws / "repo", "tag").splitlines():      # 事前登録のタグなど
+            if public and not tag.startswith("prereg-"):                 # 公開用には、作業の途中の印（やり直し前の状態など）を持ち込まない
+                continue
             sha = wsmod.git(src_ws / "repo", "rev-parse", tag)
             wsmod.git(ws, "tag", "-f", tag, sha, check=False)
+        if public:                                                       # clone が持ってきた分も含めて消す
+            for tag in wsmod.git(ws, "tag").splitlines():
+                if not tag.startswith("prereg-"):
+                    wsmod.git(ws, "tag", "-d", tag)
+            for other in wsmod.git(ws, "branch", "--format=%(refname:short)").split():   # 元の研究の名前のブランチ
+                if other != branch:
+                    wsmod.git(ws, "branch", "-D", other)
         if (src_ws / "audits").exists():
             shutil.copytree(src_ws / "audits", new_root / "audits", ignore=shutil.ignore_patterns("target"))
         scrubbed: dict[str, Any] | None = None
+        commits_before = wsmod.git(ws, "rev-list", "--reverse", "--topo-order", "HEAD").splitlines()
+        commit_map: dict[str, str] = {}
         if scrub:
             from aar.publish import required as req
             paper = fetch_one(conn, """SELECT p.id, p.abstract FROM research_proposals r JOIN papers p ON p.id = r.paper_id
@@ -135,22 +156,46 @@ def clone_project(src_id: str, *, scrub: bool = False) -> dict[str, Any]:
                 removed += paths
             if scrubbed:
                 scrubbed["paths"] = removed
+                commits_after = wsmod.git(ws, "rev-list", "--reverse", "--topo-order", "HEAD").splitlines()
+                if len(commits_after) != len(commits_before):
+                    raise RuntimeError("履歴の書き換えでコミットの数が変わった（新旧の対応を作れない）")
+                commit_map = dict(zip(commits_before, commits_after, strict=True))
+                scrubbed["commits_rewritten"] = sum(1 for a, b in commit_map.items() if a != b)
+                # 新旧の対応は、公開するリポジトリの外に残す
+                (new_root / "commit_map.tsv").write_text(
+                    "# 元の研究のコミット\t複製のコミット（履歴から取り除いたあと）\n"
+                    + "".join(f"{a}\t{b}\n" for a, b in commit_map.items()), encoding="utf-8")
+            if public:
+                left = req.run_required_checks(ws, texts)
+                bad = [i for i in left["items"] if i["id"] in ("third_party_text", "secrets") and i["status"] != "ok"]
+                if bad:
+                    shutil.rmtree(new_root)
+                    raise RuntimeError("履歴から取り除いたあとも、全履歴の検査に通らない: "
+                                       + "; ".join(f"{i['label']}: {i['evidence'][:3]}" for i in bad))
         ext = src_ws / "repo" / "data" / "external"
         if ext.exists():                                                 # Git の対象外の外部データ
             shutil.copytree(ext, ws / "data" / "external", dirs_exist_ok=True)
 
         # --- DB の記録
         prop = fetch_one(conn, "SELECT * FROM research_proposals WHERE id = %s", (src["proposal_id"],))
-        prop = dict(prop) | {"batch_key": f"fixture:{new_id}", "title": MARK + prop["title"], "status": "selected"}  # type: ignore[arg-type]
+        prop = dict(prop) | {"batch_key": f"{'public_copy' if public else 'fixture'}:{new_id}", "title": mark + prop["title"],  # type: ignore[arg-type]
+                             "status": "selected"}
         prop.pop("id")
         new_prop = _insert(conn, "research_proposals", prop, returning="id")
-        proj = dict(src) | {"id": new_id, "proposal_id": new_prop, "title": MARK + src["title"], "workflow_id": new_id,
+        proj = dict(src) | {"id": new_id, "proposal_id": new_prop, "title": mark + src["title"], "workflow_id": new_id,
                             "workspace_path": str(ws), "branch": branch, "pr_url": None, "remote_repo": None,
-                            "policy_sha256": policy.sha256, "outcome_reason": f"{src_id} を検証用に複製した"}
+                            "policy_sha256": policy.sha256,
+                            "outcome_reason": f"{src_id} を{'公開用' if public else '検証用'}に複製した"}
+        if public:
+            # 元の研究の「公開可」は引き継がない。最新の基準での独立監査と公開品質監査に合格するまで、公開不可とする
+            proj |= {"outcome": "not_publishable",
+                     "outcome_reason": f"{src_id} の公開用の複製。最新の基準での独立監査と公開品質監査が済むまで公開不可"
+                                       "（aar projects reopen --from audit で再監査する）"}
         _insert(conn, "research_projects", proj)
         prereg_map: dict[Any, Any] = {}
         for r in fetch_all(conn, "SELECT * FROM preregistrations WHERE project_id = %s ORDER BY id", (src_id,)):
             old = r.pop("id")
+            r["git_commit"] = commit_map.get(r.get("git_commit"), r.get("git_commit"))   # 履歴を書き換えたら、登録コミットも新しいほうへ
             prereg_map[old] = _insert(conn, "preregistrations", r | {"project_id": new_id}, returning="id")
         hyp_map: dict[Any, Any] = {}
         for r in fetch_all(conn, "SELECT * FROM hypotheses WHERE project_id = %s ORDER BY created_at", (src_id,)):
@@ -172,6 +217,7 @@ def clone_project(src_id: str, *, scrub: bool = False) -> dict[str, Any]:
         for a in fetch_all(conn, "SELECT * FROM audit_runs WHERE project_id = %s ORDER BY started_at", (src_id,)):
             old = a.pop("id")
             a = {k: _swap(v, src_id, new_id) for k, v in a.items()} | {"project_id": new_id}
+            a["target_commit"] = commit_map.get(a.get("target_commit"), a.get("target_commit"))
             new_run = _insert(conn, "audit_runs", a, returning="id")
             for table in ("audit_claims", "audit_findings", "audit_recomputed_metrics"):
                 for r in fetch_all(conn, f"SELECT * FROM {table} WHERE audit_run_id = %s ORDER BY id", (old,)):
@@ -187,10 +233,11 @@ def clone_project(src_id: str, *, scrub: bool = False) -> dict[str, Any]:
         for r in fetch_all(conn, "SELECT * FROM side_effects WHERE idempotency_key = %s", (f"{src_id}:understand",)):
             _insert(conn, "side_effects", r | {"idempotency_key": f"{new_id}:understand"})
         conn.execute("INSERT INTO human_interventions (project_id, kind, detail) VALUES (%s, 'select', %s)",
-                     (new_id, Jsonb({"fixture_of": src_id})))
-        store.log_event(conn, new_id, new_id, "fixture_created", {"source": src_id, "source_commit": wsmod.head(src_ws / "repo"),
-                                                                  "history_scrubbed": scrubbed})
-    return {"project_id": new_id, "source": src_id, "workspace": str(ws), "history_scrubbed": scrubbed}
+                     (new_id, Jsonb({"public_copy_of" if public else "fixture_of": src_id})))
+        store.log_event(conn, new_id, new_id, "public_copy_created" if public else "fixture_created",
+                        {"source": src_id, "source_commit": wsmod.head(src_ws / "repo"), "history_scrubbed": scrubbed})
+    return {"project_id": new_id, "source": src_id, "workspace": str(ws), "history_scrubbed": scrubbed,
+            "commit_map": str(new_root / "commit_map.tsv") if commit_map else None}
 
 
 def inject_overclaim(project_id: str) -> dict[str, Any]:
