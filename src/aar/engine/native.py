@@ -20,6 +20,7 @@ from typing import Any
 from aar import workspace as wsmod
 from aar.agents.runner import EDIT_TOOLS, READ_ONLY_TOOLS, AgentRunner, wrap_untrusted
 from aar.config import Policy
+from aar.discovery import published_text
 from aar.models import AgentResult
 from aar.sandbox import RunResult, run_in_sandbox
 
@@ -134,7 +135,7 @@ async def understand(ctx: Ctx, proposal: dict[str, Any], memory_context: str, fu
 
     body = proposal["body"]
     paper = (f"題名: {proposal.get('paper_title')}\narXiv: {proposal.get('arxiv_id')}\nDOI: {proposal.get('doi')}\n"
-             f"公開日: {proposal.get('paper_published_at')}\n\n要旨:\n{proposal.get('paper_abstract') or '(要旨なし)'}")
+             f"公開日: {published_text(proposal.get('paper_published_at'))}\n\n要旨:\n{proposal.get('paper_abstract') or '(要旨なし)'}")
     if fulltext:
         excerpt, cut = excerpt_for_prompt(fulltext)
         paper += ("\n\n本文（取得元から機械的に文章にしたもの。図と表の配置、数式は崩れていることがある"

@@ -907,3 +907,15 @@ async def test_license_evidence_stays_unconfirmed_when_the_source_does_not_say_s
     ws = _license_ws(tmp_path / "x", declared="CC0")
     await lic.record_license_evidence(ws, allowed_hosts=["data.example.org"], catalog=CATALOG, client=_license_client())
     assert not lic.load_evidence(ws)["data"][0]["confirmed"]
+
+
+def test_future_publication_date_is_shown_as_a_registered_date_not_a_fact():
+    import datetime as dt
+
+    from aar.discovery import published_text
+
+    today = dt.date(2026, 11, 24)
+    assert published_text("2026-08-12", today) == "2026-08-12"
+    assert published_text(dt.date(2026, 11, 24), today) == "2026-11-24"
+    assert "刊行予定日" in published_text("2026-12-08", today) and published_text("2026-12-08", today).startswith("2026-12-08")
+    assert published_text(None, today) == "不明" and published_text("not a date", today) == "not a date"

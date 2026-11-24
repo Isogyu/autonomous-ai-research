@@ -425,7 +425,7 @@ async def research_audit(project_id: str, round_no: int) -> dict[str, Any]:
                                          WHERE s.paper_id = %s ORDER BY s.source""", (prop.get("paper_id"),)) if prop.get("paper_id") else []
             paper_record = {
                 "題名": prop.get("paper_title"), "arxiv_id": prop.get("arxiv_id"), "doi": prop.get("doi"),
-                "url": prop.get("paper_url"), "公開日": prop.get("paper_published_at"), "要旨": prop.get("paper_abstract"),
+                "url": prop.get("paper_url"), "公開日": discovery.published_text(prop.get("paper_published_at")), "要旨": prop.get("paper_abstract"),
                 "本文の入手状況": prop.get("fulltext_status"),
                 "取得記録": [dict(s) for s in sources],
                 "注": "このシステムが論文 API（arXiv / OpenAlex / Semantic Scholar）から取得した書誌情報。本文は取得していない",
