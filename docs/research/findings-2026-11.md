@@ -1,0 +1,56 @@
+# 調査記録: Temporal・論文 API・pgvector（2026-11-23 に公式の文書と API で確認）
+
+設計に効いた点だけを残す。
+
+## Temporal（Python SDK 1.36.1、サーバー 1.32.2）
+
+- Python 3.11 以上が必須。
+- `temporalio/auto-setup` は非推奨、`temporalio/docker-compose` はアーカイブ済み。公式の Compose は `temporalio/samples-server`。
+- アクティビティの再試行は既定で回数無制限。上限と、再試行しないエラーの種類を明示する。
+- ハートビートは間引かれる。キャンセルはハートビート経由でしか届かないので、長い工程には `heartbeat_timeout` を必ず付ける。
+- 子ワークフローの既定は、親が閉じると終了（TERMINATE）。
+- 履歴の上限は 51,200 イベントまたは 50MB。研究1件の工程数は数十なので Continue-As-New は使っていない。
+- Schedule の overlap の既定は SKIP、catchup の既定は1年。長く止めたあとの再起動でまとめて走らないよう短くする。
+- ワークフローのファイルはサンドボックスで再読み込みされる。重いモジュールを読み込ませないよう、アクティビティは名前で呼ぶ。
+- 冪等キーの公式の推奨は Run ID + Activity ID だが、Continue-As-New やリセットをまたぐなら業務上のキーを使う。
+- 時間スキップのテストサーバーは ARM 非対応。テストは開発用サーバー（`start_local`）で行う。
+- Worker Versioning は GA（2026-03）。単一ワーカーの運用では patching で足りるので使っていない。
+
+## 論文 API
+
+| API | 制限 | 注意 |
+|---|---|---|
+| arXiv | 3秒に1回、同時1接続 | 日付の絞り込みは投稿日だけ。更新日は並べ替えにしか使えない。メタデータは CC0 |
+| OpenAlex | キーなしは1日 $0.10 相当（IP で共有）、無料キーで $1 | 更新日での絞り込みは有料。キーなしはページ送りが1ページ目まで |
+| Semantic Scholar | キーなしは全利用者で共有する枠 | 帰属表示が必要。`tldr` は batch で取るのが安全 |
+
+実測（2026-11-23、キーなし）: 3つとも応答し、1回の日次収集で 558 件を取得、336 件の論文として保存、情報源をまたぐ統合は 63 件。
+Semantic Scholar は 429 を返すことがあり、再試行で通った。
+
+## pgvector 0.8.7
+
+- HNSW の絞り込みは近似探索の後に効くため、件数が不足することがある。`hnsw.iterative_scan` で補う。
+- 公式イメージは `pgvector/pgvector:0.8.7-pg17` のように版を固定する。
+
+## 埋め込みモデル
+
+| モデル | 次元 | 大きさ | ライセンス | 言語 |
+|---|---|---|---|---|
+| intfloat/multilingual-e5-small | 384 | 約 0.5GB | MIT | 多言語 |
+| intfloat/multilingual-e5-base | 768 | 約 1.1GB | MIT | 多言語 |
+| BAAI/bge-m3 | 1024 | 約 2.3GB | MIT | 多言語、長文向け |
+| cl-nagoya/ruri-v3 | 256〜768 | 0.15〜1.3GB | Apache-2.0 | 日本語のみ |
+
+メモリ 8GB の PC では e5-small を第一候補にしたが、fastembed（ONNX）の対応モデルに無かったため、
+同じ 384 次元の `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`（Apache-2.0、約 0.24GB）を採用した。
+日英混在での精度の比較は確かめていない。
+
+## 参考にした設計の考え方
+
+- 事前登録と、確認的分析・探索的分析の区別（再現性の危機への対応として広く使われている方法）。
+- 実装と評価の担当を分ける（生成した側が自分の結果を評価しない）。
+- 数値は LLM を通さず、分析結果から直接表にする。
+- 進行の状態は耐久実行の基盤に持たせ、エージェントには持たせない。
+
+関連する研究や OSS の網羅的な調査（Autonomous Scientific Discovery、エージェントの記憶、研究の公正性など）は行っていない。
+AI Scientist v3 と Temporal の一次資料の確認にとどまる。

@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# 基盤の起動・停止。使い方: scripts/aarctl start|stop|status|logs
+# PostgreSQL は Docker、Temporal は単体サーバー（履歴は var/temporal.db に永続化）、ワーカーと UI は Python。
+# 止めても、研究の状態は PostgreSQL と Temporal の履歴に残り、start で続きから再開される。
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+VAR="$ROOT/var"; mkdir -p "$VAR/log" "$VAR/run"
+PY="$ROOT/.venv/bin/python"
+
+running() { [ -f "$VAR/run/$1.pid" ] && kill -0 "$(cat "$VAR/run/$1.pid")" 2>/dev/null; }
+
+launch() { # name, command...
+  local name="$1"; shift
+  if running "$name"; then echo "$name: 起動済み"; return; fi
+  nohup "$@" >>"$VAR/log/$name.log" 2>&1 &
+  echo $! >"$VAR/run/$name.pid"
+  echo "$name: 起動 (pid $!)"
+}
+
+stop_one() {
+  local name="$1"
+  if running "$name"; then
+    kill "$(cat "$VAR/run/$name.pid")" 2>/dev/null || true
+    for _ in $(seq 1 30); do running "$name" || break; sleep 1; done
+    running "$name" && kill -9 "$(cat "$VAR/run/$name.pid")" 2>/dev/null || true
+    echo "$name: 停止"
+  fi
+  rm -f "$VAR/run/$name.pid"
+}
+
+case "${1:-}" in
+  start)
+    docker compose -f infra/docker-compose.yml up -d --wait
+    launch temporal temporal server start-dev --db-filename "$VAR/temporal.db" --ip 127.0.0.1 --port 7233 --ui-port 8233 --log-level warn
+    for _ in $(seq 1 30); do temporal operator cluster health --address 127.0.0.1:7233 >/dev/null 2>&1 && break; sleep 1; done
+    "$PY" -m aar.cli migrate
+    launch worker "$PY" -m aar.cli worker
+    launch ui "$PY" -m aar.cli ui
+    echo "UI: http://127.0.0.1:${AAR_UI_PORT:-8765}  /  Temporal: http://127.0.0.1:8233"
+    ;;
+  stop)
+    stop_one ui; stop_one worker; stop_one temporal
+    if [ "${2:-}" = "--all" ]; then docker compose -f infra/docker-compose.yml stop; fi
+    ;;
+  status)
+    for n in temporal worker ui; do running "$n" && echo "$n: 稼働中" || echo "$n: 停止"; done
+    docker compose -f infra/docker-compose.yml ps --format '{{.Name}}: {{.Status}}'
+    ;;
+  logs) tail -n "${3:-50}" "$VAR/log/${2:-worker}.log" ;;
+  *) echo "使い方: $0 start|stop [--all]|status|logs [temporal|worker|ui] [行数]"; exit 1 ;;
+esac

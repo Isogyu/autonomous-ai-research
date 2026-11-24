@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# main への直接 push を止める。GitHub 側のブランチ保護が使えない間の代わり（非公開リポジトリの保護は有料プランが必要）。
+# 有効にする: git config core.hooksPath scripts/hooks
+# 意図して main に push する場合: AAR_ALLOW_MAIN_PUSH=1 git push
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  if [ "$remote_ref" = "refs/heads/main" ] && [ "${AAR_ALLOW_MAIN_PUSH:-}" != "1" ]; then
+    echo "main への直接 push は止めている。作業ブランチを push して Pull Request を作ること。" >&2
+    exit 1
+  fi
+done
+exit 0

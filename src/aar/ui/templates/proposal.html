@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ proposal.title }}{% endblock %}
+{% block content %}
+{% set b = body %}
+<p><a href="/">← 企画一覧</a></p>
+<h1>{{ proposal.title }}</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if proposal.execution_mode == 'mock' %}<p class="notice">モック（実際の企画生成ではありません）</p>{% endif %}
+{% if b.get('based_on') == 'abstract_only' %}<p class="notice">要旨のみに基づく企画です（本文は読んでいません）。</p>{% endif %}
+<p class="muted">状態: {{ proposal.status }} ／ バッチ: {{ proposal.batch_key }}</p>
+
+<div class="card"><dl>
+  <dt>題名（title）</dt><dd>{{ b.get('title', '') }}</dd>
+  <dt>原論文（source_paper）</dt><dd>{{ b.get('source_paper', '') }}
+    {% set u = paper_url|safe_url %}{% if u %}<br><a href="{{ u }}" rel="noopener noreferrer">{{ u }}</a>{% elif paper_url %}<br>{{ paper_url }}{% endif %}</dd>
+  <dt>公開日（published_at）</dt><dd>{{ b.get('published_at', '') }}</dd>
+  <dt>新規性（novelty）</dt><dd>{{ b.get('novelty', '') }}</dd>
+  <dt>何が分かっているか（known）</dt><dd>{{ b.get('known', '') }}</dd>
+  <dt>何が未解決か（unknown）</dt><dd>{{ b.get('unknown', '') }}</dd>
+  <dt>仮説（hypotheses）</dt><dd><ul>{% for h in b.get('hypotheses', []) %}<li>{{ h }}</li>{% endfor %}</ul></dd>
+  <dt>方法（method）</dt><dd>{{ b.get('method', '') }}</dd>
+  <dt>データセット（datasets）</dt><dd><ul>{% for d in b.get('datasets', []) %}<li>{{ d }}</li>{% endfor %}</ul></dd>
+  <dt>想定時間（est_runtime_hours）</dt><dd>{{ b.get('est_runtime_hours')|num(1) }} 時間</dd>
+  <dt>想定費用（est_cost_usd）</dt><dd>${{ b.get('est_cost_usd')|num }}</dd>
+  <dt>計算資源（compute）</dt><dd>{{ b.get('compute', '') }}</dd>
+  <dt>期待される結果（expected_outcomes）</dt><dd>{{ b.get('expected_outcomes', '') }}</dd>
+  <dt>期待どおりでなかった場合に残る価値（value_if_negative）</dt><dd>{{ b.get('value_if_negative', '') }}</dd>
+  <dt>企業エンジニアへの示唆（implications）</dt><dd>{{ b.get('implications', '') }}</dd>
+  <dt>発信のストーリー（story）</dt><dd>{{ b.get('story', '') }}</dd>
+  <dt>リスク（risks）</dt><dd><ul>{% for r in b.get('risks', []) %}<li>{{ r }}</li>{% endfor %}</ul></dd>
+  <dt>根拠の範囲（based_on）</dt><dd>{% if b.get('based_on') == 'abstract_only' %}要旨のみに基づく{% else %}{{ b.get('based_on', '') }}{% endif %}</dd>
+</dl></div>
+
+<h2>価値評価</h2>
+{% if score %}
+<div class="card">
+  <p>合計: <strong>{{ score.total|num(1) }}</strong> / 100 <span class="muted">（{{ score.scorer }}、基準版 {{ score.rubric_version }}）</span></p>
+  <div class="tablewrap"><table>
+    <tr><th>観点</th><th>点（0〜5）</th><th>根拠</th></tr>
+    {% for name, c in (score.criteria or {}).items() %}
+    <tr><td>{{ name }}</td><td>{{ c.get('score', '—') }}</td><td>{{ c.get('rationale', '') }}</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% else %}<p class="muted">価値評価はまだありません。</p>{% endif %}
+
+<h2>この企画で研究を開始する</h2>
+{% if project %}
+<p>この企画はすでに選ばれています。 <a href="/projects/{{ project.id }}">研究 {{ project.id }} を見る</a></p>
+{% elif proposal.status == 'proposed' %}
+<form method="post" action="/proposals/{{ proposal.id }}/select"><button type="submit">この企画で研究を開始する</button></form>
+{% else %}
+<p class="muted">この企画は選べません（状態: {{ proposal.status }}）。</p>
+{% endif %}
+{% endblock %}

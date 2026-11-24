@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>検証企画を選ぶ</h1>
+<p class="muted">実行中の研究: <a href="/projects?status=running">{{ running }} 件</a></p>
+
+{% if notifications %}
+<div class="card">
+  <h2>未読の通知（{{ unread_total }} 件中、最新 {{ notifications|length }} 件）</h2>
+  <ul>
+  {% for n in notifications %}
+    <li><span class="tag">{{ LEVEL_LABELS.get(n.level, n.level) }}</span>
+      {% if n.project_id %}<a href="/projects/{{ n.project_id }}">{{ n.title }}</a>{% else %}{{ n.title }}{% endif %}
+      <span class="muted">{{ n.created_at|dt }}</span>
+      {% if n.body %}<br><span class="muted">{{ n.body }}</span>{% endif %}</li>
+  {% endfor %}
+  </ul>
+  <form method="post" action="/notifications/read"><button class="sub" type="submit">すべて既読にする</button></form>
+</div>
+{% endif %}
+
+{% if not proposals %}
+<div class="card">
+  <p>選べる検証企画がまだありません。</p>
+  <p>ターミナルで <code>aar proposals generate</code> を実行すると作れます。</p>
+</div>
+{% endif %}
+
+{% for p in proposals %}
+{% set b = p.body or {} %}
+<div class="card">
+  <h2><a href="/proposals/{{ p.id }}">{{ p.title }}</a></h2>
+  {% if p.execution_mode == 'mock' %}<p class="warn">モック（実際の企画生成ではありません）</p>{% endif %}
+  <p class="muted">原論文: {{ b.get('source_paper', '—') }}<br>
+    公開日: {{ b.get('published_at', '—') }}<br>
+    想定時間: {{ b.get('est_runtime_hours')|num(1) }} 時間 ／ 想定費用: ${{ b.get('est_cost_usd')|num }}
+    {% if p.rank_score is not none %} ／ 順位点: {{ p.rank_score|num(1) }}{% endif %}</p>
+  {% if b.get('hypotheses') %}<p>仮説: {{ b['hypotheses'][0] }}</p>{% endif %}
+  <p><a href="/proposals/{{ p.id }}">詳細</a></p>
+</div>
+{% endfor %}
+{% endblock %}

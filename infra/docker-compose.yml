@@ -1,0 +1,25 @@
+# 研究記憶用の PostgreSQL（pgvector 入り）。
+# Temporal はメモリ節約のため Docker ではなく temporal CLI の単体サーバーで動かす（scripts/start.sh、ADR-0002）。
+name: aar
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg17
+    container_name: aar-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aar
+      POSTGRES_PASSWORD: ${AAR_PG_PASSWORD:-aar}   # ローカル専用。127.0.0.1 にしか公開しない
+      POSTGRES_DB: aar
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - aar-pgdata:/var/lib/postgresql/data
+    shm_size: 256m
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aar -d aar"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+volumes:
+  aar-pgdata:
