@@ -186,6 +186,11 @@ def clone_project(src_id: str, *, scrub: bool = False, purpose: str = "fixture")
                             "workspace_path": str(ws), "branch": branch, "pr_url": None, "remote_repo": None,
                             "policy_sha256": policy.sha256,
                             "outcome_reason": f"{src_id} を{'公開用' if public else '検証用'}に複製した"}
+        if public:
+            # 元の研究の「公開可」は引き継がない。最新の基準での独立監査と公開品質監査に合格するまで、公開不可とする
+            proj |= {"outcome": "not_publishable",
+                     "outcome_reason": f"{src_id} の公開用の複製。最新の基準での独立監査と公開品質監査が済むまで公開不可"
+                                       "（aar projects reopen --from audit で再監査する）"}
         _insert(conn, "research_projects", proj)
         prereg_map: dict[Any, Any] = {}
         for r in fetch_all(conn, "SELECT * FROM preregistrations WHERE project_id = %s ORDER BY id", (src_id,)):

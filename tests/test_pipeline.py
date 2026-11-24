@@ -692,9 +692,10 @@ async def test_public_copy_removes_third_party_text_from_history_and_keeps_the_o
     assert [a for a, _ in rows] == list(reversed(src_commits))                          # 新旧の対応が全コミットにある
     assert out["history_scrubbed"]["commits_rewritten"] >= 2 and Path(out["commit_map"]).parent == ws.parent   # 対応表はリポジトリの外
     with connect() as conn:
-        proj = fetch_one(conn, "SELECT title, remote_repo, pr_url FROM research_projects WHERE id = %s", (pc,))
+        proj = fetch_one(conn, "SELECT title, remote_repo, pr_url, outcome FROM research_projects WHERE id = %s", (pc,))
         pre = fetch_all(conn, "SELECT cycle, content_sha256, git_commit FROM preregistrations WHERE project_id = %s", (pc,))
     assert proj["title"] == p["title"] and not proj["remote_repo"] and not proj["pr_url"]   # 題名に検証用の印は付けない
+    assert proj["outcome"] == "not_publishable"                                        # 元の「公開可」は引き継がない（再監査まで）
     assert all(workspace.verify_prereg(ws, r["cycle"], r["content_sha256"], r["git_commit"])[0] for r in pre)
     with pytest.raises(ValueError):
         fixture.inject_overclaim(pc)                                                   # 公開用の複製には不具合を入れられない
