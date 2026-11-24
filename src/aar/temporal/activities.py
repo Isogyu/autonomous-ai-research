@@ -544,6 +544,24 @@ def _facts(conn: Any, project_id: str, project: dict[str, Any]) -> dict[str, Any
     }
 
 
+async def _record_licenses(ctx: Any, project: dict[str, Any], policy: Any) -> None:
+    """外部データと依存のライセンスについて、提供元の表示を研究のリポジトリに記録する（モックでは外へ取りに行かない）。
+
+    取得できなくても工程は止めない。確かめられなかったものは「未確認」と記録され、必須項目の検査で未確認になる。
+    """
+    if project["execution_mode"] == "mock":
+        return
+    from aar.publish import licenses
+
+    try:
+        res = await licenses.record_license_evidence(ctx.ws, allowed_hosts=policy.safety.dataset_hosts)
+    except Exception as e:  # noqa: BLE001  記録の失敗で成果物の作成を止めない（未確認のまま監査に進み、ゲートで止まる）
+        res = {"recorded": False, "reason": f"{type(e).__name__}: {str(e)[:200]}"}
+    if not res.get("unchanged"):
+        with connect() as conn:
+            store.log_event(conn, project["id"], project["id"], "license_evidence", res)
+
+
 @activity.defn
 async def build_deliverables(project_id: str, round_no: int, feedback_from_audit: bool) -> dict[str, Any]:
     """発信用の成果物を作る。数値の表とグラフは分析結果から機械的に作る。"""
@@ -555,6 +573,7 @@ async def build_deliverables(project_id: str, round_no: int, feedback_from_audit
             verdicts = _verdicts(conn, project_id)
             facts = _facts(conn, project_id, project)
         static = deliv.write_static(ctx, verdicts, license_spdx="MIT", holder=name)
+        await _record_licenses(ctx, project, policy)
         if round_no == 1 or not (ctx.ws / "report" / "report.md").exists():
             await deliv.write_narrative(ctx, prop, facts, round_no=round_no)
         deliv.copy_audit(ctx.ws, sorted(audit_root_of(project_id).glob("research-round*/audit")))
@@ -722,11 +741,12 @@ def _write_required_record(report: Any) -> None:
 async def refresh_deliverables(project_id: str, round_no: int) -> dict[str, Any]:
     """修正のあと、表・グラフ・HTML を作り直す（文章は修正担当が直したものを使う）。"""
     async def run() -> dict[str, Any]:
-        ctx, project, _ = make_ctx(project_id)
+        ctx, project, policy = make_ctx(project_id)
         name, _ = _git_identity()
         with connect() as conn:
             verdicts = _verdicts(conn, project_id)
         deliv.write_static(ctx, verdicts, license_spdx="MIT", holder=name)
+        await _record_licenses(ctx, project, policy)
         deliv.copy_audit(ctx.ws, sorted(audit_root_of(project_id).glob("research-round*/audit")))
         asm = deliv.assemble(ctx.ws, project["title"])
         return {"commit": wsmod.commit_all(ctx.ws, f"成果物の更新（{round_no}回目）"), **asm}

@@ -814,3 +814,96 @@ def test_dataset_preview_reads_inside_zip_without_extracting(tmp_path):
     assert "data.tsv" in out and "100 行" in out and "ham\thello" in out
     assert "deep.csv" in out and "x;y" in out and "バイナリ" in out
     assert sorted(p.name for p in ext.iterdir()) == ["d.zip"]               # 展開したファイルを残さない
+
+
+# ---------------------------------------------------------------------- ライセンスの一次資料の記録
+
+UCI_PAGE = ('<html><body><p>DOI 10.24432/C5XW20</p><h1>License</h1><p>This dataset is licensed under a\n'
+            '<a href="https://creativecommons.org/licenses/by/4.0/legalcode" rel="nofollow">Creative Commons Attribution 4.0 '
+            'International</a>\n(CC BY 4.0) license.</p><p>This allows for the sharing and adaptation of the datasets for any '
+            'purpose,\nprovided that the appropriate credit is given.</p><script>var licensed = "under MIT";</script></body></html>')
+
+
+def _license_ws(tmp_path, declared="CC BY 4.0"):
+    from aar import datasets as ds
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    ws = _repo(tmp_path, BASE | {"requirements.txt": "numpy==2.1.3\nleftpad==0.1\n# comment\nscipy>=1.0\n"})
+    (ws / ds.EXTERNAL_DIR).mkdir(parents=True)
+    (ws / ds.MANIFEST).write_text(json.dumps({"files": [
+        {"name": "Adult", "filename": "adult.zip", "url": "https://data.example.org/adult.zip", "sha256": "0" * 64,
+         "license": declared, "source": "Example"}]}), encoding="utf-8")
+    return ws
+
+
+def _license_client(page=UCI_PAGE):
+    import httpx
+
+    def handler(req):
+        if req.url.host == "data.example.org":
+            return httpx.Response(200, text=page)
+        if "numpy" in req.url.path:
+            return httpx.Response(200, json={"info": {"license_expression": "BSD-3-Clause", "classifiers": []}})
+        return httpx.Response(404)
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+CATALOG = [{"url": "https://data.example.org/adult.zip", "license_url": "https://data.example.org/dataset/adult"}]
+
+
+def test_license_statement_is_extracted_and_matched_against_the_declaration():
+    from aar.publish import licenses as lic
+
+    st, links = lic.extract_statement(UCI_PAGE)
+    assert st.startswith("This dataset is licensed under") and "CC BY 4.0" in st and "MIT" not in st   # script の中は読まない
+    assert links == ["https://creativecommons.org/licenses/by/4.0/legalcode"]
+    assert lic.statement_matches("CC BY 4.0", st) and lic.statement_matches("cc-by 4.0", st)
+    assert not lic.statement_matches("CC0", st) and not lic.statement_matches("MIT", st)
+    assert not lic.statement_matches("", st) and not lic.statement_matches("CC BY 4.0", "")
+    assert lic.extract_statement("<p>no terms here</p>")[0] == ""
+
+
+@pytest.mark.asyncio
+async def test_license_evidence_is_recorded_and_required_check_depends_on_it(tmp_path):
+    from aar.publish import licenses as lic
+    from aar.publish import required as req
+
+    ws = _license_ws(tmp_path)
+    # 提供元の表示の記録が無いうちは、取得記録の申告だけでは確認済みにしない
+    assert req.check_license(ws)["status"] == "unverified"
+    res = await lic.record_license_evidence(ws, allowed_hosts=["data.example.org"], catalog=CATALOG, client=_license_client())
+    assert res["recorded"] and res["unconfirmed"] == ["leftpad"]           # PyPI に無い依存は未確認として残す
+    ev = lic.load_evidence(ws)
+    assert ev["data"][0]["confirmed"] and len(ev["data"][0]["page_sha256"]) == 64
+    assert [d["name"] for d in ev["dependencies"]] == ["numpy", "leftpad"]  # 版を固定した行だけ
+    md = (ws / lic.EVIDENCE_MD).read_text(encoding="utf-8")
+    assert "BSD-3-Clause" in md and "未確認" in md and "This dataset is licensed under" in md
+    item = req.check_license(ws)
+    assert item["status"] == "ok" and any("提供元の表示と一致" in e for e in item["evidence"])
+    # 取得記録の申告が変わったら、古い記録では裏づけにならない
+    m = json.loads((ws / "data/external/MANIFEST.json").read_text(encoding="utf-8"))
+    m["files"][0]["license"] = "CC0"
+    (ws / "data/external/MANIFEST.json").write_text(json.dumps(m), encoding="utf-8")
+    assert req.check_license(ws)["status"] == "unverified"
+
+
+@pytest.mark.asyncio
+async def test_license_evidence_stays_unconfirmed_when_the_source_does_not_say_so(tmp_path):
+    from aar.publish import licenses as lic
+    from aar.publish import required as req
+
+    for i, (kw, reason) in enumerate([
+        (dict(catalog=CATALOG, client=_license_client("<p>All rights reserved.</p>")), "見つからない"),   # 文言がない
+        (dict(catalog=[], client=_license_client()), "登録されていない"),                                  # ページが未登録
+        (dict(catalog=CATALOG, client=_license_client(), allowed_hosts=["other.org"]), "許可されていない"),  # 許可外のホスト
+    ]):
+        ws = _license_ws(tmp_path / str(i))
+        hosts = kw.pop("allowed_hosts", ["data.example.org"])
+        res = await lic.record_license_evidence(ws, allowed_hosts=hosts, **kw)
+        assert "adult.zip" in res["unconfirmed"]
+        assert reason in lic.load_evidence(ws)["data"][0]["reason"]
+        assert req.check_license(ws)["status"] == "unverified"
+    # 申告と違うライセンスが表示されていれば、一致としない
+    ws = _license_ws(tmp_path / "x", declared="CC0")
+    await lic.record_license_evidence(ws, allowed_hosts=["data.example.org"], catalog=CATALOG, client=_license_client())
+    assert not lic.load_evidence(ws)["data"][0]["confirmed"]

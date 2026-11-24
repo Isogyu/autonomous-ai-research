@@ -2,10 +2,12 @@
 # ここに無いデータも設計に書けるが、取得できなければ設計のやり直しになる。
 # 載せる条件: 方針（config/policy.yaml の safety.dataset_hosts）で許したホストにあり、ライセンスが明示され、
 # 個人を特定する情報を含まず、200MB 以下。URL と利用条件は verified の日付に確認した。
+# license_url は、提供元がライセンスを明示しているページ。成果物を作るときにここから文言を取得して研究のリポジトリに記録する。
 # この一覧は品質ゲートの基準ではない（方針ファイルのハッシュの対象外）。
 datasets:
   - name: SMS Spam Collection
     url: https://archive.ics.uci.edu/static/public/228/sms+spam+collection.zip
+    license_url: https://archive.ics.uci.edu/dataset/228/sms+spam+collection
     filename: sms_spam_collection.zip
     license: CC BY 4.0
     source: "UCI Machine Learning Repository（Almeida & Hidalgo, 2011. DOI 10.24432/C5CC84）"
@@ -14,6 +16,7 @@ datasets:
     verified: 2026-11-24
   - name: Spambase
     url: https://archive.ics.uci.edu/static/public/94/spambase.zip
+    license_url: https://archive.ics.uci.edu/dataset/94/spambase
     filename: spambase.zip
     license: CC BY 4.0
     source: "UCI Machine Learning Repository（Hopkins et al., 1999. DOI 10.24432/C53G6X）"
@@ -22,6 +25,7 @@ datasets:
     verified: 2026-11-24
   - name: Adult (Census Income)
     url: https://archive.ics.uci.edu/static/public/2/adult.zip
+    license_url: https://archive.ics.uci.edu/dataset/2/adult
     filename: adult.zip
     license: CC BY 4.0
     source: "UCI Machine Learning Repository（Becker & Kohavi, 1996. DOI 10.24432/C5XW20）"
@@ -30,6 +34,7 @@ datasets:
     verified: 2026-11-24
   - name: Bank Marketing
     url: https://archive.ics.uci.edu/static/public/222/bank+marketing.zip
+    license_url: https://archive.ics.uci.edu/dataset/222/bank+marketing
     filename: bank_marketing.zip
     license: CC BY 4.0
     source: "UCI Machine Learning Repository（Moro, Rita & Cortez, 2014. DOI 10.24432/C5K306）"
@@ -38,6 +43,7 @@ datasets:
     verified: 2026-11-24
   - name: Wine Quality
     url: https://archive.ics.uci.edu/static/public/186/wine+quality.zip
+    license_url: https://archive.ics.uci.edu/dataset/186/wine+quality
     filename: wine_quality.zip
     license: CC BY 4.0
     source: "UCI Machine Learning Repository（Cortez et al., 2009. DOI 10.24432/C56S3T）"
@@ -46,6 +52,7 @@ datasets:
     verified: 2026-11-24
   - name: Breast Cancer Wisconsin (Diagnostic)
     url: https://archive.ics.uci.edu/static/public/17/breast+cancer+wisconsin+diagnostic.zip
+    license_url: https://archive.ics.uci.edu/dataset/17/breast+cancer+wisconsin+diagnostic
     filename: breast_cancer_wisconsin_diagnostic.zip
     license: CC BY 4.0
     source: "UCI Machine Learning Repository（Wolberg et al., 1993. DOI 10.24432/C5DW2B）"

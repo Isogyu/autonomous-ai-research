@@ -178,7 +178,7 @@ def check_personal_info(ws: Path) -> dict[str, Any]:
 
 
 def check_license(ws: Path) -> dict[str, Any]:
-    method = "LICENSE の有無と既知のライセンス文の照合、README の記載、外部データの取得記録のライセンス欄"
+    method = "LICENSE の有無と既知のライセンス文の照合、README の記載、外部データの取得記録のライセンス欄と提供元の表示の記録との照合"
     p = ws / "LICENSE"
     if not p.exists() or not p.read_text(encoding="utf-8", errors="ignore").strip():
         return _item("license", "violation", ["LICENSE がない、または空"], method)
@@ -191,12 +191,28 @@ def check_license(ws: Path) -> dict[str, Any]:
     readme = (ws / "README.md").read_text(encoding="utf-8", errors="ignore") if (ws / "README.md").exists() else ""
     if not re.search(r"(?i)license|ライセンス", readme):
         problems.append("README にライセンスの記載がない")
+    from aar.publish import licenses
+
+    ev = licenses.load_evidence(ws)
+    confirmed = {d.get("filename"): d for d in ev.get("data", []) if d.get("confirmed")}
+    unverified = []
     for f in _manifest_files(ws):
-        if not str(f.get("license") or "").strip():
-            problems.append(f"外部データ {f.get('filename')} のライセンスが記録されていない")
+        name, lic = f.get("filename"), str(f.get("license") or "").strip()
+        if not lic:
+            problems.append(f"外部データ {name} のライセンスが記録されていない")
+        elif name in confirmed and confirmed[name].get("declared") == lic:
+            notes.append(f"外部データ {name}: {lic}（提供元の表示と一致。{licenses.EVIDENCE_MD}）")
         else:
-            notes.append(f"外部データ {f.get('filename')}: {f['license']}")
-    return _item("license", "violation" if problems else "ok", problems or notes, method)
+            # 取得記録のライセンス欄は申告にすぎない。提供元の表示で裏づけられなければ、確かめたことにしない
+            unverified.append(f"外部データ {name}: {lic} と申告されているが、提供元の表示の記録（{licenses.EVIDENCE_JSON}）で裏づけられていない")
+    deps = {(d.get("name"), d.get("version")): d for d in ev.get("dependencies", [])}
+    for n, v in licenses.pinned_requirements(ws):
+        d = deps.get((n, v))
+        if d and d.get("confirmed"):
+            notes.append(f"依存 {n}=={v}: {d.get('license')}")
+    if problems:
+        return _item("license", "violation", problems, method)
+    return _item("license", "unverified" if unverified else "ok", unverified or notes, method)
 
 
 def _manifest_files(ws: Path) -> list[dict[str, Any]]:
