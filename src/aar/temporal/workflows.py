@@ -252,7 +252,8 @@ class ResearchWorkflow:
             research_changed = False
             if inp.fix_kind:
                 fix = await self._step(f"fix_{inp.fix_kind}", "fix_audit_findings", inp.fix_kind, inp.fix_round, minutes=t)
-                research_changed = bool(fix.get("research_changed"))
+                await self._hold_if_prereg_touched(fix)
+                research_changed = bool(fix.get("research_changed") or fix.get("prereg_touched"))
                 if fix.get("needs_rerun"):
                     run_no += 1
                     await self._rerun(inp, run_no, started)
