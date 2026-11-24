@@ -928,6 +928,9 @@ async def test_license_evidence_is_recorded_and_required_check_depends_on_it(tmp
     assert [d["name"] for d in ev["dependencies"]] == ["numpy", "leftpad"]  # 版を固定した行だけ
     md = (ws / lic.EVIDENCE_MD).read_text(encoding="utf-8")
     assert "BSD-3-Clause" in md and "未確認" in md and "This dataset is licensed under" in md
+    assert "tools/fetch_data.py" in md                                       # 外部データがあるときは、取得スクリプトを案内する
+    no_data = lic.render(ev | {"data": []})                                 # ないときは、存在しないスクリプトを案内しない
+    assert "tools/fetch_data.py" not in no_data and "外部のデータを使っていない" in no_data and "BSD-3-Clause" in no_data
     item = req.check_license(ws)
     assert item["status"] == "ok" and any("提供元の表示と一致" in e for e in item["evidence"])
     # リポジトリの中の記録を書き換えても、裏づけにはならない（修正担当が「確認済み」と書き足す抜け道をふさぐ）
