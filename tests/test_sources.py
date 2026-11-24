@@ -87,7 +87,10 @@ def test_parse_arxiv_feed():
 
 def test_arxiv_query_and_search():
     q = build_search_query("LLM agent", ["cs.AI", "cs.CL"], date(2026, 11, 20), date(2026, 11, 23))
-    assert q == '(cat:cs.AI OR cat:cs.CL) AND all:"LLM agent" AND submittedDate:[202611200000 TO 202611232359]'
+    assert q == "(cat:cs.AI OR cat:cs.CL) AND all:LLM AND all:agent AND submittedDate:[202611200000 TO 202611232359]"
+    # 語ごとの AND（句の一致にしない）。ハイフンつきの語は引用符で囲み、引用符や括弧は検索式に入れない
+    assert build_search_query('multi-agent "LLM" (x)', [], date(2026, 11, 20), date(2026, 11, 23)).startswith(
+        'all:"multi-agent" AND all:LLM AND all:x AND submittedDate:')
     seen = []
 
     def handler(req: httpx.Request) -> httpx.Response:

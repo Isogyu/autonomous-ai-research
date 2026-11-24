@@ -46,13 +46,13 @@
 - macOS、Python 3.11 以上、Docker Desktop、Git、GitHub CLI（`gh`）
 - Temporal CLI（`brew install temporal`）
 - Claude Code と Codex の CLI（どちらもログイン済みであること。API キーは使わない）
-- 研究独立監査 Skill（[skills/README.md](skills/README.md)）
+- 研究独立監査 Skill と GitHub 公開品質監査 Skill（[skills/README.md](skills/README.md)）。どちらも必須
 
 ## 導入
 
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -e ".[dev,embed]"
-scripts/install_skills.sh <研究独立監査 Skill の zip>
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev,embed,fulltext]"
+scripts/install_skills.sh <研究独立監査 Skill の zip> <GitHub 公開品質監査 Skill の zip>
 scripts/aarctl start          # PostgreSQL・Temporal・ワーカー・UI を起動
 .venv/bin/aar doctor          # 足りないものを確認
 ```
@@ -62,6 +62,7 @@ scripts/aarctl start          # PostgreSQL・Temporal・ワーカー・UI を起
 ```sh
 aar ingest                    # 論文を今すぐ収集（通常は毎日 6:30 に自動）
 aar proposals generate        # 企画を今すぐ生成（通常は毎週月曜 7:30 に自動）
+aar proposals generate --public-data --paper <論文ID> --batch <名前>   # 公開データセットを使う企画を、論文を指定して作る
 aar proposals list            # 企画の一覧
 aar select 1                  # 企画を選ぶ。以降は自動で進む
 aar projects list             # 研究の一覧
@@ -81,6 +82,23 @@ scripts/aarctl start          # 再開。実行中だった研究は続きから
 aar projects pause|resume|cancel <研究ID>
 aar projects budget <研究ID> <ドル>   # 費用上限に達して保留になったとき
 aar projects reopen <研究ID>          # 公開不可で終わった研究を、未対応の指摘の修正と独立監査からやり直す（基準は同じ）
+aar projects reopen <研究ID> --from publication   # 公開品質監査からやり直す（公開可で終わった研究も対象）
+aar projects required-check <研究ID>  # 公開前の必須項目（秘密情報・個人情報・第三者の文章・ライセンス・データ）の決定的な検査だけを実行
+aar limits                    # Codex・Claude Code の利用上限の状態（解除の見込み時刻までは問い合わせない）
+aar limits --clear codex      # 利用枠の回復を自分で確かめたとき
+scripts/aarctl restart-worker # コードや設定を変えたあと、ワーカーだけを入れ替える
+```
+
+利用上限に達した研究は、相手が示した解除の時刻まで待って自動で再開する（1つの工程につき 5 回まで）。
+Mac がスリープしている間は待ち時間も進まない。電源につないで動かすなら `AAR_KEEP_AWAKE=1 scripts/aarctl start`。
+
+公開データセットを使う研究では、[config/datasets.yaml](config/datasets.yaml) の一覧（取得できることとライセンスを確認済みのもの）を
+企画と設計の担当に示す。データは再配布せず、取得元・ハッシュ・ライセンスの記録と、取得し直すスクリプトだけをリポジトリに入れる。
+
+監査と修正の流れを実物で確かめるための道具（本番の研究には書き込まない）:
+
+```sh
+aar dev fixture <公開可で完了した研究ID> --start   # 検証用（FX-…）として複製し、複製にだけ意図的な不具合を入れて、公開品質監査から実行
 ```
 
 成果物は `workspaces/<研究ID>/repo/`（研究ごとの Git リポジトリ、ブランチ `research/<研究ID>`）にできる。

@@ -20,6 +20,7 @@ from typing import Any
 from aar import workspace as wsmod
 from aar.agents.runner import EDIT_TOOLS, READ_ONLY_TOOLS, AgentRunner, wrap_untrusted
 from aar.config import Policy
+from aar.discovery import published_text
 from aar.models import AgentResult
 from aar.sandbox import RunResult, run_in_sandbox
 
@@ -80,7 +81,8 @@ DESIGN_SCHEMA = _obj({
     "research_question": _S,
     "hypotheses": {"type": "array", "items": _obj({"label": _S, "statement": _S, "decision_rule": _S})},
     "primary_metric": _S, "secondary_metrics": _SL, "baselines": _SL, "conditions": _SL,
-    "datasets": {"type": "array", "items": _obj({"name": _S, "source": _S, "license": _S, "note": _S})},
+    "datasets": {"type": "array", "items": _obj({"name": _S, "source": _S, "license": _S, "note": _S,
+                                                  "url": _S, "filename": _S})},
     "data_split": _S,
     "sample_size": _obj({"pilot": {"type": "integer"}, "main": {"type": "integer"}, "rationale": _S}),
     "statistical_analysis": _S, "success_failure_criteria": _S, "exploratory_plan": _S,
@@ -106,7 +108,9 @@ def experiment_contract(packages: list[str]) -> str:
     return f"""## 実験コードの決まり（オーケストレーターがこの形で実行する）
 - 実行環境: ネットワークなしの隔離環境、Python 3.12。使えるライブラリは標準ライブラリと {", ".join(packages)} だけ
   （`requirements.txt` に `name==version` で書いた版が導入される。Python 3.12 に対応する版を書くこと）。
-  外部 API・モデルのダウンロード・LLM の呼び出しはできない。データは `data/` にあるものか、コードで生成するものを使う。
+  外部 API・モデルのダウンロード・LLM の呼び出しはできない。データは、コードで生成するものか、
+  `data/external/` に取得済みの公開データ（一覧は `data/external/MANIFEST.json`）を使う。
+  `data/external/` は Git に入らない（再配布しない）ので、コードはそこから読み込むだけにし、中身を `results/` に丸ごと写さない。
 - `experiments/run.py --stage pilot|main --out <dir>`
   - `<dir>/raw.jsonl`（試行ごとの生データ。後から独立に再計算できる粒度で）と `<dir>/run_meta.json`
     （シード、件数、所要時間、`prereg/cycleN.json` の SHA-256）を書く。集計値だけを保存してはいけない。
@@ -125,11 +129,17 @@ def experiment_contract(packages: list[str]) -> str:
 """
 
 
-async def understand(ctx: Ctx, proposal: dict[str, Any], memory_context: str) -> dict[str, Any]:
+async def understand(ctx: Ctx, proposal: dict[str, Any], memory_context: str, fulltext: str | None = None) -> dict[str, Any]:
     """Phase A: 原論文と関連研究を読み、研究課題と既存研究の限界を整理する。"""
+    from aar.sources.fulltext import excerpt_for_prompt
+
     body = proposal["body"]
     paper = (f"題名: {proposal.get('paper_title')}\narXiv: {proposal.get('arxiv_id')}\nDOI: {proposal.get('doi')}\n"
-             f"公開日: {proposal.get('paper_published_at')}\n\n要旨:\n{proposal.get('paper_abstract') or '(要旨なし)'}")
+             f"公開日: {published_text(proposal.get('paper_published_at'))}\n\n要旨:\n{proposal.get('paper_abstract') or '(要旨なし)'}")
+    if fulltext:
+        excerpt, cut = excerpt_for_prompt(fulltext)
+        paper += ("\n\n本文（取得元から機械的に文章にしたもの。図と表の配置、数式は崩れていることがある"
+                  + ("。長いため中ほどを省いてある" if cut else "") + "）:\n" + excerpt)
     prompt = f"""検証企画に基づき、原論文の理解を整理する。
 
 ## 企画
@@ -141,12 +151,15 @@ async def understand(ctx: Ctx, proposal: dict[str, Any], memory_context: str) ->
 ## 過去の研究の記憶（このシステム自身の記録）
 {memory_context or "(該当なし)"}
 
-要旨しか読めていない場合は basis を abstract_only とし、要旨から分かることと推測を区別して書く。
-本文にしかない内容（手法の詳細、数値）を知っているかのように書かない。
+本文が上にあれば、それを読んで整理し、basis を fulltext とする（省かれた部分や崩れた表・数式から読み取れないことは、
+読み取れないと書く）。要旨しか無い場合は basis を abstract_only とし、要旨から分かることと推測を区別して書く。
+読んでいない内容（手法の詳細、数値）を知っているかのように書かない。
 """
     res = await ctx.ask("planner", "研究理解", f"{ctx.project_id}:understand", prompt, schema=UNDERSTAND_SCHEMA, budget=1.5)
     data = res.structured or {}
-    doc = ["# 原論文の整理", "", f"根拠: {'要旨のみ' if data.get('basis') == 'abstract_only' else '本文'}", "",
+    if not fulltext:
+        data["basis"] = "abstract_only"      # 本文を渡していないのに「本文を読んだ」とは記録しない
+    doc = ["# 原論文の整理", "", f"根拠: {'要旨のみ' if data.get('basis') == 'abstract_only' else '本文（機械的に文章にしたもの）'}", "",
            "## 要約", data.get("summary", ""), "", "## 研究課題", data.get("research_problem", "")]
     for title, k in (("論文の主張", "claims_in_paper"), ("既存研究の限界", "limitations_of_prior_work"),
                      ("未解決の問い", "open_questions"), ("関連研究", "related_work")):
@@ -158,8 +171,18 @@ async def understand(ctx: Ctx, proposal: dict[str, Any], memory_context: str) ->
 
 
 async def design(ctx: Ctx, proposal: dict[str, Any], understanding: dict[str, Any], cycle: int,
-                 previous: dict[str, Any] | None, memory_context: str) -> dict[str, Any]:
+                 previous: dict[str, Any] | None, memory_context: str, dataset_feedback: str = "") -> dict[str, Any]:
     """Phase B: 研究設計。返した内容がそのまま事前登録になる。"""
+    from aar import datasets as ds
+
+    catalog = ds.catalog_text(ds.load_catalog(), ctx.policy.safety.dataset_hosts)
+    if (proposal.get("body") or {}).get("requires_public_data"):
+        data_choice = ("この企画は公開データを使うことが条件である。datasets に、取得できる公開データを少なくとも1つ書き、"
+                       "主要な仮説の検証をそのデータで行う（合成データだけの設計にしない）。")
+    else:
+        data_choice = "公開データを使うことで問いに良く答えられる場合だけ使い、合成データで足りるなら無理に使わない。"
+    catalog_block = (f"\n  取得できることを確認済みの公開データ（ここから選ぶと確実。ほかのデータも書けるが、取得できなければ設計をやり直す）:\n{catalog}"
+                     if catalog else "")
     prev = ""
     if previous:
         prev = ("\n## 前のサイクルの結果と、次に検証すると決めたこと\n" + json.dumps(previous, ensure_ascii=False, indent=2, default=str) +
@@ -183,7 +206,14 @@ async def design(ctx: Ctx, proposal: dict[str, Any], understanding: dict[str, An
 - 期待どおりでない結果になっても意味が残る設計にする（value_if_hypotheses_fail に書く）。結論ありきにしない。
 - 個人の PC（CPU のみ、メモリ 8GB）で main が {ctx.policy.safety.experiment_timeout_minutes} 分以内に終わる規模にする。
 - 件数の根拠（検出したい差と、その差を見分けられる見込み）を sample_size.rationale に書く。
-- データが外部のものなら出所とライセンスを書く。ネットワークなしで用意できないデータは使わない。
+- データ（datasets）: コードで生成するデータは url と filename を空文字にする。
+  公開データを使う場合は、url に直接ダウンロードできる https の URL、filename に保存名、license に利用条件、source に出所を書く。
+  オーケストレーターが実験の前に取得して `data/external/<filename>` に置く。取得できるのは次のホストだけ:
+  {", ".join(ctx.policy.safety.dataset_hosts) or "（なし。外部データは使えない）"}。1ファイル {ctx.policy.safety.dataset_max_mb}MB まで。圧縮ファイルは展開されない。
+  実在を確信できない URL を書かない。ライセンスが分からないデータ、利用条件が研究用途を許さないデータは使わない。
+  {data_choice}{catalog_block}
+- 公開データを使う場合は、data_split に「どの単位で、どの比率で、どのシードで分けるか」と、重複や同じ出所の標本が
+  学習側と評価側にまたがらないようにする方法を書く。primary_metric には指標の定義を書く。{dataset_feedback}
 - 仮説のラベルは H1, H2, ... とする。サイクル {cycle} の設計である。
 """
     res = await ctx.ask("planner", "研究設計", f"{ctx.project_id}:design:{cycle}", prompt, schema=DESIGN_SCHEMA, budget=2.0)
@@ -207,6 +237,10 @@ async def implement(ctx: Ctx, prereg: dict[str, Any], cycle: int, attempt: int, 
 ## 守ること
 - `prereg/` 以下のファイルは変更しない（変更すると研究は無効になる）。
 - 事前登録から外れる必要が生じたら、勝手に変えずに deviations_from_prereg に理由つきで書く。
+- 事前登録に dataset_manifest があれば、外部データは `data/external/<filename>` に取得済みである（実験の実行時も同じ場所にある。
+  ネットワークは使えない）。形式の下見が `data/external/PREVIEW.md` にあるので、読んでから実装する。圧縮ファイルは
+  実験コードの中で標準ライブラリを使って読む（展開したファイルを `data/external/` に書かない。結果は `results/` に書く）。
+  外部データが無いときに合成データへ黙って切り替える処理を書かない（無ければ明確なエラーにする）。
 - あなたはコードを実行できない。実行はオーケストレーターが行い、失敗したらログが返ってくる。
 - 既存のファイルがあれば読んでから直す。サイクル {cycle} の出力先は `results/cycle{cycle}/` 以下。
 """

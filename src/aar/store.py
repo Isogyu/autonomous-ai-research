@@ -233,11 +233,11 @@ def save_audit(conn: psycopg.Connection, project_id: str, round_no: int, report:
         conn,
         """INSERT INTO audit_runs (project_id, kind, round, auditor, implementer, skill, target_commit, status,
                research_verdict, publication_verdict, score, report_uri, summary, execution_mode, idempotency_key,
-               finished_at)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now()) RETURNING id""",
+               finished_at, detail)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s) RETURNING id""",
         (project_id, report.kind, round_no, report.auditor, implementer, report.skill, target_commit, report.status,
          report.research_verdict, report.publication_verdict, report.score, report.report_dir, report.summary,
-         report.execution_mode, key),
+         report.execution_mode, key, Jsonb(report.detail)),
     )
     audit_id = str(row["id"])  # type: ignore[index]
     for c in report.claims:
@@ -259,13 +259,16 @@ def save_audit(conn: psycopg.Connection, project_id: str, round_no: int, report:
             (audit_id, m.claim_id, m.metric, m.condition, m.original_value, m.independent_value, m.difference,
              m.tolerance, within, m.interpretation))
     # 再監査は毎回すべてを調べ直す。前の回の指摘は、同じ issue_id で再び挙がれば未解消、挙がらなければ解消とする
-    # （再監査の担当には、残っている問題は元の issue_id のまま報告するよう指示している）
+    # （再監査の担当には、残っている問題は元の issue_id のまま報告するよう指示している）。
+    # ただし、担当に前回の指摘として渡しているのは Critical・Major だけなので、「解消」と言えるのもそれだけ。
+    # 軽い指摘は、挙がらなくても解消とはせず not_rechecked にする（別の ID で挙がり直すことがある）
     if round_no > 1 and report.status != "failed":
         raised = [f.issue_id for f in report.findings]
         conn.execute(
             """UPDATE audit_findings f
-               SET status = CASE WHEN f.issue_id = ANY(%s) THEN 'unresolved' ELSE 'resolved' END,
-                   resolved_in_round = CASE WHEN f.issue_id = ANY(%s) THEN NULL ELSE %s END
+               SET status = CASE WHEN f.issue_id = ANY(%s) THEN 'unresolved'
+                                 WHEN f.severity IN ('Critical', 'Major') THEN 'resolved' ELSE 'not_rechecked' END,
+                   resolved_in_round = CASE WHEN f.issue_id = ANY(%s) OR f.severity NOT IN ('Critical', 'Major') THEN NULL ELSE %s END
                FROM audit_runs a WHERE f.audit_run_id = a.id AND a.project_id = %s AND a.kind = %s AND a.round < %s
                  AND f.status IN ('open', 'fix_attempted', 'unresolved')""",
             (raised, raised, round_no, project_id, report.kind, round_no))

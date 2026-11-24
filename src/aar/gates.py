@@ -60,16 +60,32 @@ def evaluate_research_gate(
 def evaluate_publication_gate(
     gate: GatePublication, report: AuditReport, *, secrets_found: int, has_limitations: bool, has_repro: bool,
     has_license: bool, tests_passed: bool, claims_grounded: bool, pinned_policy_sha: str, current_policy_sha: str,
+    required_violations: list[str] | None = None, required_unverified: list[str] | None = None,
 ) -> GateResult:
     checks: list[GateCheck] = [policy_check(pinned_policy_sha, current_policy_sha)]
     checks.append(GateCheck(name="公開品質監査が最後まで実行された", passed=report.status == "completed",
                             detail=f"監査の状態: {report.status}（{report.skill}）"))
+    if gate.require_formal_skill:
+        # 利用者の Skill による監査で、結果が Skill の決まりに合っていること。代用の監査では通らない
+        formal = bool(report.checks.get("formal_skill"))
+        checks.append(GateCheck(name="正式な公開品質監査 Skill による監査で、結果が正常である", passed=formal,
+                                detail="" if formal else "; ".join(report.detail.get("problems") or ["Skill による監査ではない"])[:300]))
+        verdict = report.publication_verdict
+        checks.append(GateCheck(name=f"Skill の公開判定が {'・'.join(gate.accept_verdicts)} のいずれか",
+                                passed=formal and verdict in gate.accept_verdicts, detail=f"判定 {verdict or 'なし'}"))
+        checks.append(GateCheck(name="Skill が公開保留としていない", passed=formal and not report.checks.get("publication_hold", True)))
     score = report.score if report.score is not None else -1
     checks.append(GateCheck(name=f"公開品質の点数が {gate.min_score:g} 点以上", passed=score >= gate.min_score,
                             detail=f"{score:g} 点" if score >= 0 else "点数なし"))
     n_crit, n_major = _count(report, "Critical"), _count(report, "Major")
     checks.append(GateCheck(name="Critical の指摘が残っていない", passed=n_crit <= gate.max_open_critical, detail=f"{n_crit} 件"))
     checks.append(GateCheck(name="Major の指摘が残っていない", passed=n_major <= gate.max_open_major, detail=f"{n_major} 件"))
+    # 公開前の必須項目（秘密情報・個人情報・第三者の著作物・ライセンス・データの権利）。方針の設定では外せない。
+    # None（検査していない）も不合格にする
+    checks.append(GateCheck(name="公開前の必須項目の決定的な検査に違反がない", passed=required_violations == [],
+                            detail="検査していない" if required_violations is None else "、".join(required_violations) or "違反なし"))
+    checks.append(GateCheck(name="公開前の必須項目に未確認が残っていない", passed=required_unverified == [],
+                            detail="検査していない" if required_unverified is None else "、".join(required_unverified) or "すべて確認済み"))
     if gate.require_no_secrets:
         checks.append(GateCheck(name="秘密情報が含まれていない", passed=secrets_found == 0, detail=f"検出 {secrets_found} 件"))
     if gate.require_limitations_section:

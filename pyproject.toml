@@ -24,6 +24,8 @@ dependencies = [
 [project.optional-dependencies]
 # 埋め込みをローカル CPU で計算する（ONNX。PyTorch は使わない）
 embed = ["fastembed>=0.4"]
+# 論文の本文を PDF から取り出す（arXiv の HTML 版が無い論文向け）
+fulltext = ["pypdf>=4"]
 
 
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6"]

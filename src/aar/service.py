@@ -96,18 +96,33 @@ def _workflow_id(project_id: str) -> str:
         return store.get_project(conn, project_id)["workflow_id"]
 
 
-async def reopen_project(project_id: str) -> dict[str, Any]:
-    """「公開不可」で終わった研究を、独立監査からやり直す（利用者の判断による追加の修正・再監査）。
+async def reopen_project(project_id: str, *, from_: str = "audit", adopt_current_policy: bool = False) -> dict[str, Any]:
+    """終わった研究を、監査からやり直す（利用者の判断による追加の修正・再監査）。
 
-    品質ゲートの基準は変わらない。監査の回は続きの番号になり、これまでの記録は残る。
+    from_ が audit なら独立監査から（公開不可・失敗で終わった研究）、publication なら公開品質監査から
+    （公開可で終わった研究も対象。たとえば監査の Skill を入れ替えたあとの再確認）。
+    監査の回は続きの番号になり、これまでの記録と成果物は残る。やり直しの前の状態には Git のタグを付ける。
+
+    品質ゲートの基準は、研究の開始時に固定したもののまま。方針ファイルが変わっている場合は、
+    adopt_current_policy を明示したときだけ現在の方針に固定し直す（人の判断として記録する。エージェントからは呼べない）。
     """
+    if from_ not in ("audit", "publication"):
+        raise ValueError("from_ は audit か publication")
     policy = load_policy()
+    allowed = ("not_publishable", "failed") if from_ == "audit" else ("publishable", "publishable_with_revisions", "not_publishable", "failed")
     with connect() as conn:
         p = store.get_project(conn, project_id)
-        if p["status"] != "completed" or p["outcome"] != "not_publishable":
-            raise ValueError("再開できるのは、公開不可で終わった研究だけ")
+        if p["status"] not in ("completed", "failed") or p["outcome"] not in allowed:
+            raise ValueError(f"この研究（{p['status']} / {p['outcome']}）は {from_} からは再開できない")
+        if not fetch_one(conn, "SELECT 1 FROM experiments WHERE project_id = %s AND kind = 'main' AND status = 'completed'", (project_id,)):
+            raise ValueError("本実験が完了していない研究は、監査からは再開できない")
         if p["policy_sha256"] != policy.sha256:
-            raise ValueError("方針ファイルが研究の開始時から変わっている。この研究は開始時の基準でしか再開できない")
+            if not adopt_current_policy:
+                raise ValueError("方針ファイルが研究の開始時から変わっている。現在の方針で再開するなら --adopt-current-policy を付ける")
+            from psycopg.types.json import Jsonb
+            conn.execute("INSERT INTO human_interventions (project_id, kind, detail) VALUES (%s, 'adopt_policy', %s)",
+                         (project_id, Jsonb({"from": p["policy_sha256"], "to": policy.sha256})))
+            store.set_project(conn, project_id, policy_sha256=policy.sha256)
         r = fetch_one(conn, """SELECT
               coalesce((SELECT max(round) FROM audit_runs WHERE project_id = %(p)s AND kind = 'research'), 0) AS rr,
               coalesce((SELECT max(round) FROM audit_runs WHERE project_id = %(p)s AND kind = 'publication_quality'), 0) AS pr,
@@ -115,28 +130,58 @@ async def reopen_project(project_id: str) -> dict[str, Any]:
               (SELECT count(*) FROM experiments WHERE project_id = %(p)s AND kind = 'main') AS runs,
               (SELECT count(*) FROM human_interventions WHERE project_id = %(p)s AND kind = 'reopen') AS reopens,
               (SELECT CASE gate WHEN 'research' THEN 'research' ELSE 'publication_quality' END FROM gate_evaluations
-                WHERE project_id = %(p)s AND NOT passed ORDER BY id DESC LIMIT 1) AS fix_kind,
-              (SELECT round FROM gate_evaluations WHERE project_id = %(p)s AND NOT passed ORDER BY id DESC LIMIT 1) AS fix_round""",
+                WHERE project_id = %(p)s ORDER BY id DESC LIMIT 1) AS last_kind,
+              (SELECT round FROM gate_evaluations WHERE project_id = %(p)s ORDER BY id DESC LIMIT 1) AS last_round,
+              (SELECT passed FROM gate_evaluations WHERE project_id = %(p)s ORDER BY id DESC LIMIT 1) AS last_passed""",
                       {"p": project_id})
+        r = dict(r)  # type: ignore[arg-type]
+        # 最後のゲートが通っていなければ、その指摘の修正から始める
+        unfixed = r["last_passed"] is False
+        r["fix_kind"] = r["last_kind"] if unfixed else ""
+        r["fix_round"] = r["last_round"] if unfixed else 0
+        if p.get("workspace_path"):
+            from pathlib import Path
+
+            from aar import workspace as wsmod
+            wsmod.git(Path(p["workspace_path"]), "tag", "-f", f"before-reopen-{r['reopens'] + 1}", check=False)
         workflow_id = f"{project_id}-reopen-{r['reopens'] + 1}"  # type: ignore[index]
         store.set_project(conn, project_id, status="running", outcome=None, outcome_reason=None, phase="reopened",
                           finished_at=None, workflow_id=workflow_id)
         conn.execute("INSERT INTO human_interventions (project_id, kind) VALUES (%s, 'reopen')", (project_id,))
-        store.log_event(conn, project_id, workflow_id, "reopened", dict(r))  # type: ignore[arg-type]
+        store.log_event(conn, project_id, workflow_id, "reopened", r | {"from": from_})
     client = await get_client()
     await client.start_workflow(
         "ResearchWorkflow",
         ResearchInput(project_id=project_id, max_cycles=policy.research.max_cycles,
                       max_research_audit_rounds=policy.gates.research.max_audit_rounds,
                       max_publication_audit_rounds=policy.gates.publication.max_audit_rounds,
-                      phase_timeout_minutes=policy.research.phase_timeout_minutes, resume_from="audit",
+                      phase_timeout_minutes=policy.research.phase_timeout_minutes, resume_from=from_,
                       cycle=int(r["cycle"]), run_no=int(r["runs"]), start_research_round=int(r["rr"]) + 1,  # type: ignore[index]
                       start_publication_round=int(r["pr"]) + 1, fix_kind=r["fix_kind"] or "",  # type: ignore[index]
                       fix_round=int(r["fix_round"] or 0)),  # type: ignore[index]
         id=workflow_id, task_queue=get_settings().task_queue,
         id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE, id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
         execution_timeout=timedelta(hours=policy.research.max_wallclock_hours * 2))
-    return {"project_id": project_id, "workflow_id": workflow_id, **dict(r)}  # type: ignore[arg-type]
+    return {"project_id": project_id, "workflow_id": workflow_id, "from": from_, **r}
+
+
+def adopt_policy(project_id: str) -> dict[str, str]:
+    """保留中の研究を、現在の方針ファイルに固定し直す（方針を意図して変えた場合の、人の判断としての取り込み）。
+
+    対象は「方針の変更」で保留になっている研究だけ。前後のハッシュを人の介入として記録する。
+    このあと resume で再開する。エージェントからは呼べない（CLI からの操作だけ）。
+    """
+    policy = load_policy()
+    with connect() as conn:
+        p = store.get_project(conn, project_id)
+        if p["status"] != "on_hold" or "[policy_changed]" not in (p["outcome_reason"] or ""):
+            raise ValueError("方針の変更で保留になっている研究だけが対象")
+        from psycopg.types.json import Jsonb
+        conn.execute("INSERT INTO human_interventions (project_id, kind, detail) VALUES (%s, 'adopt_policy', %s)",
+                     (project_id, Jsonb({"from": p["policy_sha256"], "to": policy.sha256})))
+        store.set_project(conn, project_id, policy_sha256=policy.sha256)
+        store.log_event(conn, project_id, p["workflow_id"], "policy_adopted", {"from": p["policy_sha256"], "to": policy.sha256})
+    return {"from": p["policy_sha256"], "to": policy.sha256}
 
 
 async def control_project(project_id: str, action: str) -> None:
@@ -151,6 +196,46 @@ async def control_project(project_id: str, action: str) -> None:
 async def change_budget(project_id: str, budget_usd: float) -> None:
     client = await get_client()
     await client.get_workflow_handle(_workflow_id(project_id)).execute_update("change_budget", budget_usd)
+
+
+async def reconcile_projects() -> list[dict[str, str]]:
+    """DB では進行中なのに、ワークフローが終わっている研究を見つけて、失敗として確定する。
+
+    ワークフローが全体の制限時間で打ち切られたり、外から終了させられたりすると、結果を確定する工程が動かず、
+    DB の状態が「実行中」「保留」のまま残る。長く動かすと必ず起きるので、ワーカーの起動時と定期的に確かめる。
+    実行中のワークフローと、正常に完了したワークフローには触れない。
+    """
+    from temporalio.service import RPCError, RPCStatusCode
+
+    with connect() as conn:
+        rows = fetch_all(conn, "SELECT id, workflow_id, status, phase, title FROM research_projects "
+                               "WHERE status IN ('running', 'paused', 'on_hold')")
+    if not rows:
+        return []
+    client = await get_client()
+    fixed = []
+    for r in rows:
+        try:
+            desc = await client.get_workflow_handle(r["workflow_id"]).describe()
+            state = desc.status.name if desc.status else "UNKNOWN"
+        except RPCError as e:
+            if e.status != RPCStatusCode.NOT_FOUND:
+                continue
+            state = "NOT_FOUND"
+        if state in ("RUNNING", "COMPLETED", "CONTINUED_AS_NEW", "UNKNOWN"):
+            continue
+        reason = (f"[workflow_ended] ワークフローが {state} で終わっていた（工程 {r['phase']} の途中）。結果は確定していない。"
+                  "本実験まで終わっていれば `aar projects reopen` で監査からやり直せる")
+        with connect() as conn:
+            done = conn.execute("UPDATE research_projects SET status = 'failed', outcome = 'failed', outcome_reason = %s, finished_at = now() "
+                                "WHERE id = %s AND status IN ('running', 'paused', 'on_hold') AND workflow_id = %s",
+                                (reason, r["id"], r["workflow_id"])).rowcount
+            if done:
+                store.log_event(conn, r["id"], r["workflow_id"], "reconciled", {"workflow_state": state, "was": r["status"], "phase": r["phase"]})
+                store.notify(conn, r["id"], "error", f"研究が途中で終わっていた: {r['title'][:50]}", reason,
+                             f"{r['id']}:reconciled:{r['workflow_id']}", macos=bool(load_policy().notify.get("macos", True)))
+                fixed.append({"project_id": r["id"], "workflow_state": state})
+    return fixed
 
 
 async def ensure_schedules() -> list[str]:
@@ -180,12 +265,13 @@ async def ensure_schedules() -> list[str]:
     return created
 
 
-async def run_now(kind: str, arg: str = "") -> dict[str, Any]:
+async def run_now(kind: str, arg: str = "", *, prefer_public_data: bool = False, paper_ids: list[str] | None = None) -> dict[str, Any]:
     """収集または企画生成を今すぐ1回実行して結果を待つ。"""
     client = await get_client()
     wf = {"ingest": "IngestWorkflow", "proposals": "ProposalWorkflow"}[kind]
     stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S")
-    return await client.execute_workflow(wf, arg, id=f"aar-{kind}-manual-{stamp}", task_queue=get_settings().task_queue,
+    args: list[Any] = [arg, prefer_public_data, paper_ids] if kind == "proposals" and (prefer_public_data or paper_ids) else [arg]
+    return await client.execute_workflow(wf, args=args, id=f"aar-{kind}-manual-{stamp}", task_queue=get_settings().task_queue,
                                          execution_timeout=timedelta(hours=3))
 
 

@@ -101,10 +101,14 @@ def ingest(day: Annotated[str, typer.Argument(help="対象日（YYYY-MM-DD）。
 
 
 @proposals_app.command("generate")
-def proposals_generate() -> None:
+def proposals_generate(
+    batch: Annotated[str, typer.Option(help="企画のまとまりの名前（省略すると今週）")] = "",
+    paper: Annotated[list[str] | None, typer.Option(help="企画を作る論文の ID（複数可）。省略すると価値評価の上位から選ぶ")] = None,
+    public_data: Annotated[bool, typer.Option(help="公開データセット（config/datasets.yaml）を使う企画にする")] = False,
+) -> None:
     """検証企画を今すぐ生成する。"""
     from aar import service
-    _print(asyncio.run(service.run_now("proposals")))
+    _print(asyncio.run(service.run_now("proposals", batch, prefer_public_data=public_data, paper_ids=paper)))
 
 
 @proposals_app.command("list")
@@ -206,10 +210,35 @@ def projects_cancel(project_id: str) -> None:
 
 
 @projects_app.command("reopen")
-def projects_reopen(project_id: str) -> None:
-    """公開不可で終わった研究を、独立監査からやり直す（基準は変わらない）。"""
+def projects_reopen(
+    project_id: str,
+    from_: Annotated[str, typer.Option("--from", help="audit: 独立監査から / publication: 公開品質監査から")] = "audit",
+    adopt_current_policy: Annotated[bool, typer.Option(help="方針ファイルが変わっている場合に、現在の方針に固定し直す（記録に残る）")] = False,
+) -> None:
+    """終わった研究を監査からやり直す。これまでの記録と成果物は残る。"""
     from aar import service
-    _print(asyncio.run(service.reopen_project(project_id)))
+    _print(asyncio.run(service.reopen_project(project_id, from_=from_, adopt_current_policy=adopt_current_policy)))
+
+
+@projects_app.command("required-check")
+def projects_required_check(project_id: str) -> None:
+    """公開前の必須項目の決定的な検査を、いまの公開候補に実行する（読み取りだけ。記録は変えない）。"""
+    from aar.publish import required
+    from aar.temporal.activities import _third_party_texts, workspace_of
+    out = required.run_required_checks(workspace_of(project_id), _third_party_texts(project_id))
+    for i in out["items"]:
+        typer.echo(f"{'✓' if i['status'] == 'ok' else '✗'} {i['label']}: {i['status']}")
+        for e in i["evidence"]:
+            typer.echo(f"    {e}")
+    typer.echo(f"対象コミット {out['commit'][:12]} / 違反 {len(out['violations'])} / 未確認 {len(out['unverified'])}")
+    raise typer.Exit(0 if not out["violations"] and not out["unverified"] else 1)
+
+
+@projects_app.command("adopt-policy")
+def projects_adopt_policy(project_id: str) -> None:
+    """方針の変更で保留になった研究を、現在の方針に固定し直す（記録に残る）。そのあと resume で再開する。"""
+    from aar import service
+    _print(service.adopt_policy(project_id))
 
 
 @projects_app.command("budget")
@@ -244,6 +273,47 @@ def metrics() -> None:
     """システムの自己評価。"""
     from aar import service
     _print(service.self_metrics())
+
+
+@app.command("limits")
+def limits_cmd(clear: Annotated[str, typer.Option(help="解除を確かめた実行担当（codex / claude）の記録を消す")] = "") -> None:
+    """実行担当の利用上限の状態を表示する。解除の見込み時刻までは、パイプラインは相手に問い合わせない。"""
+    from aar import limits
+    from aar.db.core import connect
+    with connect() as conn:
+        if clear:
+            typer.echo(f"{clear}: " + ("記録を消した（次の呼び出しから問い合わせる）" if limits.clear_limit(conn, clear) else "記録はない"))
+            conn.execute("INSERT INTO human_interventions (kind, detail) VALUES ('clear_rate_limit', %s)",
+                         (__import__("psycopg.types.json", fromlist=["Jsonb"]).Jsonb({"provider": clear}),))
+        rows = limits.current_limits(conn)
+    if not rows:
+        typer.echo("利用上限に達している実行担当はない")
+    for r in rows:
+        typer.echo(f"{r['provider']}: {limits.fmt_local(r['limited_until'])} まで待機（{r['source']}、連続 {r['consecutive_hits']} 回）"
+                   f" {(r['message'] or '')[:120]}")
+
+
+dev_app = typer.Typer(help="検証用の道具（本番の研究には書き込まない）", no_args_is_help=True)
+app.add_typer(dev_app, name="dev")
+
+
+@dev_app.command("fixture")
+def dev_fixture(
+    source_id: str,
+    defect: Annotated[str, typer.Option(help="入れる不具合。overclaim: 証拠を超える主張 / none: 入れない")] = "overclaim",
+    start: Annotated[bool, typer.Option(help="作ったあと、公開品質監査から実行する")] = False,
+    scrub_history: Annotated[bool, typer.Option(help="複製の履歴から、過去のコミットにだけ残る第三者の文章を取り除く")] = False,
+) -> None:
+    """公開可で完了した研究を検証用（FX-…）として複製し、複製にだけ意図的な不具合を入れる。元の研究は変えない。"""
+    from aar import fixture, service
+    out = fixture.clone_project(source_id, scrub=scrub_history)
+    if defect == "overclaim":
+        out["defect"] = fixture.inject_overclaim(out["project_id"])
+    elif defect != "none":
+        raise typer.BadParameter("defect は overclaim か none")
+    if start:
+        out["started"] = asyncio.run(service.reopen_project(out["project_id"], from_="publication"))
+    _print(out)
 
 
 @app.command("rescore")

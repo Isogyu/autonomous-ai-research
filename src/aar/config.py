@@ -30,13 +30,16 @@ class Settings(BaseSettings):
     workspaces_dir: Path = PROJECT_ROOT / "workspaces"
     # 監査 Skill の置き場所（skills/README.md を参照）
     research_audit_skill_dir: Path = PROJECT_ROOT / "skills" / "independent-research-audit"
-    publication_audit_skill_dir: Path = PROJECT_ROOT / "skills" / "github-publication-quality-audit"
+    publication_audit_skill_dir: Path = PROJECT_ROOT / "skills" / "repo-publication-audit"
     ai_scientist_dir: Path = PROJECT_ROOT / "vendor" / "AI-Scientist-v3"
     # 論文 API の連絡先・キー（任意）
     contact_email: str = ""
     openalex_api_key: str = ""
     semantic_scholar_api_key: str = ""
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    # 利用上限の解除の見込み時刻に足す余裕と、再開までの最短の待ち時間（秒）。テストで短くするための設定
+    rate_limit_margin_s: int = 120
+    rate_limit_min_wait_s: int = 60
     # mock にすると外部 API とエージェント CLI を呼ばない（結果は mock として記録される）
     mode: str = "real"
     ui_host: str = "127.0.0.1"
@@ -68,6 +71,8 @@ class GatePublication(BaseModel):
     require_limitations_section: bool = True
     require_reproduction_steps: bool = True
     require_license: bool = True
+    require_formal_skill: bool = True               # 利用者の公開品質監査 Skill による監査を必須にする
+    accept_verdicts: list[str] = ["A", "B"]         # Skill の公開判定のうち、公開候補にしてよいもの
     max_audit_rounds: int = 2
 
 
@@ -128,6 +133,9 @@ class SafetyPolicy(BaseModel):
     experiment_timeout_minutes: int = 30
     allow_metered_api_in_experiments: bool = False
     min_free_disk_mb: int = 150
+    # 公開データセットを取得してよいホスト（サブドメインを含む）と、1ファイルの大きさの上限
+    dataset_hosts: list[str] = Field(default_factory=list)
+    dataset_max_mb: int = 200
     hold_on: list[str] = Field(default_factory=list)
 
 

@@ -5,6 +5,7 @@ Temporal のアクティビティの入出力にも使うので、すべて JSON
 
 from __future__ import annotations
 
+import datetime as dt
 from datetime import date, datetime
 from typing import Any, Literal
 
@@ -82,6 +83,7 @@ class Proposal(BaseModel):
     story: str                            # 情報発信のストーリー
     risks: list[str]
     based_on: Literal["abstract_only", "fulltext"] = "abstract_only"
+    requires_public_data: bool = False    # 公開データを使うことを条件にした企画（設計でも守らせる）
 
 
 # ------------------------------------------------------------------ エージェント実行
@@ -101,6 +103,7 @@ class AgentResult(BaseModel):
     session_id: str | None = None
     error: str | None = None
     error_kind: Literal["auth", "rate_limit", "timeout", "budget", "other"] | None = None
+    retry_at: dt.datetime | None = None     # 利用上限の解除時刻（相手が示した場合だけ。UTC）
 
 
 # ------------------------------------------------------------------ 監査
@@ -156,6 +159,7 @@ class AuditReport(BaseModel):
     report_dir: str = ""
     execution_mode: Literal["real", "mock"] = "real"
     cost_usd: float = 0.0
+    detail: dict[str, Any] = Field(default_factory=dict)   # 内訳の点数、保留点、判定の根拠、結果の検証、実行ログの場所など
 
 
 class GateCheck(BaseModel):

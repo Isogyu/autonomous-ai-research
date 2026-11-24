@@ -35,7 +35,7 @@ KIND_LABELS = {
     "experiment": "実験", "finding": "監査指摘", "lesson": "教訓",
 }
 FINDING_STATUS_LABELS = {
-    "open": "未対応", "fix_attempted": "修正を試行", "resolved": "解決済み", "unresolved": "未解決",
+    "open": "未対応", "fix_attempted": "修正を試行", "resolved": "解決済み", "unresolved": "未解決", "not_rechecked": "追跡していない",
 }
 LEVEL_LABELS = {"info": "情報", "success": "成功", "warning": "注意", "error": "エラー"}
 CONTROL_ACTIONS = ("pause", "resume", "cancel")
