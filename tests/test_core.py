@@ -595,6 +595,45 @@ def test_copied_audit_record_omits_paper_abstract_and_local_paths(tmp_path):
     assert "ABSTRACT TEXT" in (audit / "source_evidence" / "paper_record.json").read_text()       # 原本はそのまま
 
 
+def test_copied_audit_log_omits_third_party_text_shown_by_the_auditor(tmp_path):
+    """監査の実行ログには、実行担当が表示したファイルの中身が残る。原論文の要旨が写っている行は、公開候補に写さない。
+
+    実物で起きた: 公開用の複製の再監査で、過去の公開品質監査の実行ログ（要旨入りの記録を表示した結果）が提出のコミットに入り、
+    提出直前の検査で差し止められた。
+    """
+    from aar import workspace as wsmod
+    from aar.publish import required as req
+    from aar.publish.deliverables import copy_audit
+
+    audit = tmp_path / "audits" / "publication-round2" / "audit"
+    audit.mkdir(parents=True)
+    shown = json.dumps({"type": "item.completed", "item": {"command": "cat paper_record.json",
+                                                             "aggregated_output": '{"要旨": "' + ABSTRACT.replace(". ", ".\n") + '"}'}})
+    kept = json.dumps({"type": "item.completed", "item": {"command": "git status --short", "aggregated_output": ""}})
+    (audit / "execution_log.jsonl").write_text(kept + "\n" + shown + "\n" + kept + "\n", encoding="utf-8")
+    (audit / "notes.md").write_text("要旨の写し:\n" + ABSTRACT.replace(". ", ".\n") + "\n", encoding="utf-8")     # 行をまたいで写っている
+    (audit / "skill_report.md").write_text("原論文の題名と、短い引用（" + ABSTRACT[:60] + "）だけ。\n", encoding="utf-8")
+    ws = _repo(tmp_path, {"README.md": "# r\n"})
+    texts = [("原論文の要旨", ABSTRACT)]
+
+    assert copy_audit(ws, [audit]) == []                                    # 照合元を渡さなければ、これまでどおり
+    wsmod.commit_all(ws, "監査の報告（取り除かない場合）")
+    assert req.check_third_party_text(ws, texts)["status"] == "violation"
+    wsmod.git(ws, "reset", "-q", "--hard", "HEAD~1")
+    wsmod.git(ws, "reflog", "expire", "--expire=now", "--all")
+    wsmod.git(ws, "gc", "-q", "--prune=now")
+
+    redacted = copy_audit(ws, [audit], texts)
+    lines = (ws / "audit/publication-round2/execution_log.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(x)["type"] for x in lines] == ["item.completed", "redacted", "item.completed"]   # その行だけを置き換え、JSONL のまま
+    assert "memorisation" not in (ws / "audit/publication-round2/notes.md").read_text(encoding="utf-8")
+    assert ABSTRACT[:60] in (ws / "audit/publication-round2/skill_report.md").read_text(encoding="utf-8")   # 短い引用は残す
+    assert len(redacted) == 2 and all("原論文の要旨" in r for r in redacted)
+    wsmod.commit_all(ws, "監査の報告")
+    assert req.check_third_party_text(ws, texts)["status"] == "ok"          # 提出直前の検査と同じ照合に通る
+    assert "memorisation" in (audit / "execution_log.jsonl").read_text(encoding="utf-8")    # 監査の原本はそのまま
+
+
 # ------------------------------------------------------------------ 公開前の必須項目（決定的な検査）
 
 ABSTRACT = ("We study how evaluation harnesses for tool-using language agents inflate reported accuracy when the retrieval "
