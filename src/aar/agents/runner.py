@@ -76,6 +76,11 @@ def _classify_error(text: str) -> str:
 _AT = re.compile(r"(?i)\b(?:try again|resets?|available again)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b")
 _IN = re.compile(r"(?i)\b(?:try again|retry|resets?)\s+in\s+((?:\d+\s*(?:days?|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)[\s,]*(?:and\s+)?)+)")
 _UNIT = re.compile(r"(?i)(\d+)\s*(d|h|m|s)")
+# 日付つきの時刻（「try again at Nov 25th, 2026 12:32 AM」）。年は省略されることがある
+_MONTHS = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
+_ON = re.compile(r"(?i)\b(?:try again|resets?|available again)\s+(?:(?:at|on)\s+)?"
+                 r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(?:(\d{4}),?\s+)?"
+                 r"(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b")
 
 
 def parse_retry_at(text: str, now: dt.datetime | None = None) -> dt.datetime | None:
@@ -83,6 +88,8 @@ def parse_retry_at(text: str, now: dt.datetime | None = None) -> dt.datetime | N
 
     「try again at 5:20 AM」のような時刻は、この PC の現地時刻として解釈し、過ぎていれば翌日とみなす。
     「try again in 2 hours 5 minutes」のような待ち時間にも対応する。
+    「try again at Nov 25th, 2026 12:32 AM」のような日付つきの時刻は、その日付の現地時刻として解釈する
+    （年がなければ、これから来るほうの年）。すでに過ぎた日時や、8 日より先の日時は読み取れなかったものとして扱う。
     """
     now = now or dt.datetime.now(dt.UTC)
     m = _IN.search(text)
@@ -90,6 +97,22 @@ def parse_retry_at(text: str, now: dt.datetime | None = None) -> dt.datetime | N
         secs = sum(int(n) * {"d": 86400, "h": 3600, "m": 60, "s": 1}[u.lower()] for n, u in _UNIT.findall(m.group(1)))
         if 0 < secs <= 8 * 86400:
             return now + dt.timedelta(seconds=secs)
+    m = _ON.search(text)
+    if m:
+        month, day, year = _MONTHS[m.group(1).lower()], int(m.group(2)), m.group(3)
+        hour, minute, ampm = int(m.group(4)), int(m.group(5) or 0), (m.group(6) or "").lower()
+        if ampm == "pm" and hour < 12:
+            hour += 12
+        if ampm == "am" and hour == 12:
+            hour = 0
+        local = now.astimezone()
+        try:
+            at = local.replace(year=int(year) if year else local.year, month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
+            if not year and at <= local:
+                at = at.replace(year=at.year + 1)
+        except ValueError:
+            return None
+        return at.astimezone(dt.UTC) if dt.timedelta(0) < at - local <= dt.timedelta(days=8) else None
     m = _AT.search(text)
     if m:
         hour, minute, ampm = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower()
