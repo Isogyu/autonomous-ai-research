@@ -586,3 +586,7 @@ def test_copied_audit_record_omits_paper_abstract_and_local_paths(tmp_path):
     assert "ABSTRACT TEXT" not in json.dumps(copied, ensure_ascii=False) and copied["doi"] == "10.1/x" and copied["取得記録"]
     assert str(tmp_path) not in (ws / "audit/research-round1/evidence.csv").read_text()
     assert "ABSTRACT TEXT" in (audit / "source_evidence" / "paper_record.json").read_text()       # 原本はそのまま
+
+def test_preregistration_change_counts_as_a_change_to_the_research():
+    assert touches_research(["prereg/cycle1.json"]) and not touches_code_or_data(["prereg/cycle1.json"])
+    assert not touches_research(["README.md", "docs/limitations.md", "report/report.md"])
