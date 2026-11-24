@@ -758,6 +758,17 @@ def test_parse_retry_at():
     assert parse_retry_at("Please try again in 45s", now) == now + dt.timedelta(seconds=45)
     assert parse_retry_at("rate limit exceeded", now) is None
     assert parse_retry_at("try again at 99:99", now) is None
+    # 日付つきの時刻（実物の Codex のメッセージ。2026-11-25 に、読み取れずに一定時間の待ちへ切り替わった）
+    late = dt.datetime(2026, 11, 24, 14, 36, tzinfo=dt.UTC)   # 日本時間 11/24 23:36
+    real = ("You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage "
+            "to purchase more credits or try again at Nov 25th, 2026 12:32 AM.")
+    want = late.astimezone().replace(year=2026, month=11, day=25, hour=0, minute=32, second=0, microsecond=0)
+    assert parse_retry_at(real, late) == want
+    assert parse_retry_at("try again at Nov 25th 12:32 AM.", late) == want                       # 年なし
+    assert parse_retry_at("Try again on December 1, 2026 at 9:05 PM", late).astimezone().timetuple()[:5] == (2026, 12, 1, 21, 5)
+    assert parse_retry_at("try again at Nov 20th, 2026 12:32 AM.", late) is None                 # 過ぎた日時
+    assert parse_retry_at("try again at Feb 30th, 2027 1:00 AM.", late) is None                  # ない日付
+    assert parse_retry_at("try again at Jan 5th, 2027 1:00 AM.", late) is None                   # 8 日より先
 
 
 @pytest.mark.db
