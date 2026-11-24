@@ -100,7 +100,11 @@ def build_search_query(query: str | None, categories: list[str], since: date, un
     if categories:
         parts.append("(" + " OR ".join(f"cat:{c}" for c in categories) + ")")
     if query:
-        parts.append('all:"' + query.replace('"', " ") + '"')
+        # 語ごとの AND にする。全体を1つの句にすると、複数の語からなる領域名（"agent evaluation benchmark" など）は
+        # その並びのままでは論文に現れず、ほぼ 0 件になる（2026-11-24 に実物で確認: 7日間で句 0 件、語の AND 95 件）。
+        # ハイフンでつながった語は、1つの語として引用符で囲む
+        for word in re.findall(r"[^\s\"()]+", query):
+            parts.append(f'all:"{word}"' if re.search(r"[^A-Za-z0-9]", word) else f"all:{word}")
     parts.append(f"submittedDate:[{since:%Y%m%d}0000 TO {until:%Y%m%d}2359]")
     return " AND ".join(parts)
 
