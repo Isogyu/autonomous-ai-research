@@ -486,6 +486,13 @@ async def fix_audit_findings(project_id: str, kind: str, round_no: int) -> dict[
                                             "proposed_fix": "計算や記述の誤りなら直す。証拠で支えられない主張なら、主張そのものを取り下げるか弱める"}})
         if not findings:
             return {"changed_paths": [], "research_changed": False, "needs_rerun": False, "prereg_touched": False}
+        if kind != "research":
+            # 修正担当は外へ取りに行けない。ライセンスの提供元の表示は、修正の前に基盤が取得して置いておく
+            # （あとから置くと、修正担当が「確認できない」と書いた文章と食い違う）
+            with connect() as conn:
+                project = store.get_project(conn, project_id)
+            await _record_licenses(ctx, project, policy)
+            wsmod.commit_all(ctx.ws, "第三者のライセンスの記録")
         out = await fixmod.fix_findings(ctx, findings, kind=kind, round_no=round_no, cycle=cycle)
         with connect() as conn:
             conn.execute("""UPDATE audit_findings f SET status = 'fix_attempted' FROM audit_runs a

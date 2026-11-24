@@ -193,7 +193,9 @@ def check_license(ws: Path) -> dict[str, Any]:
         problems.append("README にライセンスの記載がない")
     from aar.publish import licenses
 
-    ev = licenses.load_evidence(ws)
+    # 基盤が取得したときのままの記録だけを裏づけに使う（リポジトリの中のファイルなので、書き換えられ得る）
+    ev = licenses.load_evidence(ws, trusted_only=True)
+    tampered = (ws / licenses.EVIDENCE_JSON).exists() and not licenses.is_untouched(ws)
     confirmed = {d.get("filename"): d for d in ev.get("data", []) if d.get("confirmed")}
     unverified = []
     for f in _manifest_files(ws):
@@ -210,6 +212,8 @@ def check_license(ws: Path) -> dict[str, Any]:
         d = deps.get((n, v))
         if d and d.get("confirmed"):
             notes.append(f"依存 {n}=={v}: {d.get('license')}")
+    if tampered:
+        unverified.append(f"{licenses.EVIDENCE_JSON} が、基盤が取得したときの内容と違う（裏づけに使わない）")
     if problems:
         return _item("license", "violation", problems, method)
     return _item("license", "unverified" if unverified else "ok", unverified or notes, method)

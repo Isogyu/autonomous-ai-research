@@ -125,9 +125,20 @@ async def _dependency_evidence(client: httpx.AsyncClient, name: str, version: st
     return out
 
 
-def load_evidence(ws: Path) -> dict[str, Any]:
+def digest_path(ws: Path) -> Path:
+    """記録のハッシュの置き場所。研究のリポジトリの外（修正担当が書けない場所）に置く。"""
+    return ws.parent / "audits" / "license_evidence.sha256"
+
+
+def is_untouched(ws: Path) -> bool:
+    """記録が、基盤が取得して書いたときのままか。修正担当などが書き換えた記録は、裏づけに使わない。"""
+    p, d = ws / EVIDENCE_JSON, digest_path(ws)
+    return p.exists() and d.exists() and hashlib.sha256(p.read_bytes()).hexdigest() == d.read_text(encoding="utf-8").strip()
+
+
+def load_evidence(ws: Path, *, trusted_only: bool = False) -> dict[str, Any]:
     p = ws / EVIDENCE_JSON
-    if not p.exists():
+    if not p.exists() or (trusted_only and not is_untouched(ws)):
         return {}
     try:
         return dict(json.loads(p.read_text(encoding="utf-8")))
@@ -154,7 +165,7 @@ async def record_license_evidence(ws: Path, *, allowed_hosts: list[str], repo_li
     deps = pinned_requirements(ws)
     if not files and not deps:
         return {"recorded": False, "reason": "外部データも、版を固定した依存もない"}
-    prev = load_evidence(ws)
+    prev = load_evidence(ws, trusted_only=True)   # 書き換えられた記録は使わず、取り直す
     want = {"data": sorted((f.get("filename"), f.get("license", "")) for f in files), "deps": sorted(deps)}
     if prev and _key(prev) == {"data": [tuple(x) for x in want["data"]], "deps": [tuple(x) for x in want["deps"]]} and all(
             x.get("confirmed") for x in prev.get("data", []) + prev.get("dependencies", [])):
@@ -174,6 +185,8 @@ async def record_license_evidence(ws: Path, *, allowed_hosts: list[str], repo_li
     (ws / "docs").mkdir(exist_ok=True)
     (ws / EVIDENCE_JSON).write_text(json.dumps(ev, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (ws / EVIDENCE_MD).write_text(render(ev), encoding="utf-8")
+    digest_path(ws).parent.mkdir(parents=True, exist_ok=True)
+    digest_path(ws).write_text(hashlib.sha256((ws / EVIDENCE_JSON).read_bytes()).hexdigest() + "\n", encoding="utf-8")
     return {"recorded": True, "unchanged": False,
             "unconfirmed": [str(x.get("filename") or x.get("name")) for x in data + dependencies if not x.get("confirmed")]}
 

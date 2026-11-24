@@ -63,6 +63,9 @@ async def fix_findings(ctx: Ctx, findings: list[dict[str, Any]], *, kind: str, r
 - 結果の数値（`results/` 以下）を手で書き換えない。コードを直したら needs_rerun を true にする（再実行はオーケストレーターが行う）。
 - 結論が証拠を超えているという指摘には、結論の書き方を弱めて対応する。
 - 直せない指摘を直したと書かない。
+- `docs/third_party_licenses.md` と `docs/license_evidence.json` がある場合、それはオーケストレーターが提供元から取得した
+  ライセンス表示の記録である。編集しない。ライセンスやデータの利用条件についての記述は、この記録にある範囲で書き、
+  記録に無いことを確認済みと書かない。
 """
     # 修正担当に渡した内容（指摘と証拠）を、証跡として残す
     record = ctx.ws.parent / "audits" / f"fix-{kind}-round{round_no}"

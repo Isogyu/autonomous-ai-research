@@ -880,6 +880,14 @@ async def test_license_evidence_is_recorded_and_required_check_depends_on_it(tmp
     assert "BSD-3-Clause" in md and "未確認" in md and "This dataset is licensed under" in md
     item = req.check_license(ws)
     assert item["status"] == "ok" and any("提供元の表示と一致" in e for e in item["evidence"])
+    # リポジトリの中の記録を書き換えても、裏づけにはならない（修正担当が「確認済み」と書き足す抜け道をふさぐ）
+    path = ws / lic.EVIDENCE_JSON
+    original = path.read_text(encoding="utf-8")
+    path.write_text(original.replace('"reason"', '"note"').replace('"confirmed": false', '"confirmed": true'), encoding="utf-8")
+    tampered = req.check_license(ws)
+    assert tampered["status"] == "unverified" and any("基盤が取得したとき" in e for e in tampered["evidence"])
+    path.write_text(original, encoding="utf-8")
+    assert req.check_license(ws)["status"] == "ok"
     # 取得記録の申告が変わったら、古い記録では裏づけにならない
     m = json.loads((ws / "data/external/MANIFEST.json").read_text(encoding="utf-8"))
     m["files"][0]["license"] = "CC0"
