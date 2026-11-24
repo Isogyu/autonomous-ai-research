@@ -655,3 +655,48 @@ async def test_content_changed_after_the_audit_blocks_submission(stack, monkeypa
     with connect() as conn:
         appr = fetch_one(conn, "SELECT decision, detail FROM publication_approvals WHERE project_id = %s", (pid,))
     assert appr["decision"] == "pending" and appr["detail"]["status"] == "blocked"
+
+
+async def test_public_copy_removes_third_party_text_from_history_and_keeps_the_original(stack):
+    """履歴に原論文の要旨が残る研究から、公開用の独立した複製を作る。複製の全履歴は検査に通り、原本は変わらない。"""
+    from aar import fixture, service, workspace
+    from aar.db.core import connect, fetch_all, fetch_one
+    from aar.mock import mock_papers
+    from aar.publish import required as req
+
+    proposal_id = await _proposal(stack)
+    src = (await service.select_and_start(proposal_id))["id"]
+    p = await _wait(src, ("completed", "failed"))
+    assert p["outcome"] == "publishable", p["outcome_reason"]
+    src_ws = Path(p["workspace_path"])
+    abstract = mock_papers()[0].abstract
+    # いまのファイルには無く、過去のコミットにだけ残っている状態を作る
+    (src_ws / "docs" / "source_abstract.md").write_text(abstract + "\n", encoding="utf-8")
+    workspace.commit_all(src_ws, "要旨を追加")
+    (src_ws / "docs" / "source_abstract.md").unlink()
+    workspace.commit_all(src_ws, "要旨を削除")
+    workspace.git(src_ws, "tag", "-f", "before-reopen-1")
+    texts = [("原論文の要旨", abstract)]
+    assert req.check_third_party_text(src_ws, texts)["status"] == "violation"
+    src_head, src_commits = workspace.head(src_ws), workspace.git(src_ws, "rev-list", "HEAD").splitlines()
+
+    out = fixture.clone_project(src, purpose="public")
+    pc, ws = out["project_id"], Path(out["workspace"])
+    assert pc.startswith("PC-") and ws != src_ws
+    full = req.run_required_checks(ws, texts)
+    assert full["violations"] == [] and full["unverified"] == []                       # 複製の全履歴が検査に通る
+    assert workspace.git(ws, "tag").split() == ["prereg-cycle1"]                        # 作業の途中の印は持ち込まない
+    assert workspace.git(ws, "branch", "--format=%(refname:short)").split() == [f"research/{pc}"]
+    assert not workspace.git(ws, "remote")
+    rows = [line.split("\t") for line in Path(out["commit_map"]).read_text(encoding="utf-8").splitlines() if not line.startswith("#")]
+    assert [a for a, _ in rows] == list(reversed(src_commits))                          # 新旧の対応が全コミットにある
+    assert out["history_scrubbed"]["commits_rewritten"] >= 2 and Path(out["commit_map"]).parent == ws.parent   # 対応表はリポジトリの外
+    with connect() as conn:
+        proj = fetch_one(conn, "SELECT title, remote_repo, pr_url FROM research_projects WHERE id = %s", (pc,))
+        pre = fetch_all(conn, "SELECT cycle, content_sha256, git_commit FROM preregistrations WHERE project_id = %s", (pc,))
+    assert proj["title"] == p["title"] and not proj["remote_repo"] and not proj["pr_url"]   # 題名に検証用の印は付けない
+    assert all(workspace.verify_prereg(ws, r["cycle"], r["content_sha256"], r["git_commit"])[0] for r in pre)
+    with pytest.raises(ValueError):
+        fixture.inject_overclaim(pc)                                                   # 公開用の複製には不具合を入れられない
+    # 原本は変わっていない（履歴に要旨が残ったまま）
+    assert workspace.head(src_ws) == src_head and req.check_third_party_text(src_ws, texts)["status"] == "violation"

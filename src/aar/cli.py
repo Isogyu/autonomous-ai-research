@@ -297,6 +297,17 @@ dev_app = typer.Typer(help="検証用の道具（本番の研究には書き込�
 app.add_typer(dev_app, name="dev")
 
 
+@projects_app.command("public-copy")
+def projects_public_copy(project_id: str) -> None:
+    """公開可で完了した研究から、公開用の独立した複製を作る（原本は変更しない）。
+
+    履歴に残る第三者の文章（原論文の要旨の写し）を複製の側で取り除き、全履歴を検査する。監査はやり直しになるので、
+    必要な修正をしてから `aar projects reopen <複製のID> --from audit` で独立監査から再開する。
+    """
+    from aar import fixture
+    _print(fixture.clone_project(project_id, purpose="public"))
+
+
 @dev_app.command("fixture")
 def dev_fixture(
     source_id: str,
