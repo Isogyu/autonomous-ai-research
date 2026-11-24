@@ -628,3 +628,30 @@ async def test_failure_while_the_host_slept_is_retried_then_held(stack, monkeypa
     await service.control_project(pid, "resume")
     p = await _wait(pid, ("completed", "failed"), timeout=240)
     assert p["status"] == "failed" and "正常な結果" in p["outcome_reason"], p["outcome_reason"]
+
+
+async def test_content_changed_after_the_audit_blocks_submission(stack, monkeypatch):
+    """監査に合格したあとで公開候補が変わっていたら（監査の報告の追加を除く）、提出せず、公開可にしない。"""
+    import json
+    from pathlib import Path
+
+    from aar import service
+    from aar.db.core import connect, fetch_one
+    from aar.publish import deliverables as deliv
+
+    original = deliv.copy_audit
+
+    def leaky(ws, dirs):
+        original(ws, dirs)
+        if any("publication-round" in str(d) for d in dirs):   # 提出の直前（監査のあと）にだけ、監査していない変更が入る
+            (ws / "README.md").write_text((ws / "README.md").read_text(encoding="utf-8") + "\n監査のあとに足した主張。\n", encoding="utf-8")
+    monkeypatch.setattr(deliv, "copy_audit", leaky)
+    proposal_id = await _proposal(stack)
+    pid = (await service.select_and_start(proposal_id))["id"]
+    p = await _wait(pid, ("completed", "failed"), timeout=180)
+    assert p["outcome"] == "not_publishable" and "README.md" in p["outcome_reason"], p["outcome_reason"]
+    final = json.loads((Path(p["workspace_path"]).parent / "audits" / "final_check.json").read_text(encoding="utf-8"))
+    assert final["changed_outside_audit"] == ["README.md"] and final["prereg_intact"] and final["final_commit"] != final["audited_commit"]
+    with connect() as conn:
+        appr = fetch_one(conn, "SELECT decision, detail FROM publication_approvals WHERE project_id = %s", (pid,))
+    assert appr["decision"] == "pending" and appr["detail"]["status"] == "blocked"
