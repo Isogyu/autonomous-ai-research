@@ -856,7 +856,7 @@ async def mark_hold(project_id: str, kind: str, message: str, seq: int) -> None:
                           outcome_reason=f"[{kind}] {message}"[:1000])
         store.log_event(conn, project_id, project_id, "on_hold", {"kind": kind, "message": message}, key=f"{project_id}:hold:{seq}")
         title = {"auth": "認証が必要", "budget": "費用上限に到達", "policy_changed": "方針ファイルが変更された",
-                 "rate_limit": "利用上限のため待機", "setup": "設定が不足", "resource": "ディスクの空きが不足", "paused": "一時停止"}.get(kind, "保留")
+                 "rate_limit": "利用上限のため待機", "setup": "設定が不足", "resource": "ディスクの空きが不足", "paused": "一時停止", "host_sleep": "PC のスリープで時間切れ"}.get(kind, "保留")
         key = f"{project_id}:hold:{seq}"
         if kind == "rate_limit":
             # 同じ解除待ちのあいだは、待ち直すたびに通知しない（解除の見込み時刻が変わったとき、人の操作が要るときだけ）
@@ -866,6 +866,25 @@ async def mark_hold(project_id: str, kind: str, message: str, seq: int) -> None:
             key = f"{project_id}:ratelimit:{'manual' if manual else until.isoformat(timespec='minutes') if until else seq}"
         store.notify(conn, project_id, "warning", f"{title}: {project['title'][:50]}", message[:500],
                      key, macos=bool(load_policy().notify.get("macos", True)))
+
+
+@activity.defn
+async def host_sleep_check(project_id: str, phase: str, since_iso: str, retries: int) -> dict[str, Any]:
+    """工程が時間切れになったとき、その間に PC がスリープしていたかを調べる。
+
+    スリープ中は実行担当が動けないので、時間切れは研究や監査の失敗ではない。していた場合は工程をやり直す。
+    """
+    from aar import limits
+
+    since = dt.datetime.fromisoformat(since_iso)
+    seconds = await asyncio.to_thread(limits.host_sleep_seconds, since)
+    out = {"phase": phase, "since": since_iso, "slept_seconds": seconds, "slept": seconds >= HOST_SLEEP_MIN_S, "retries": retries}
+    with connect() as conn:
+        store.log_event(conn, project_id, project_id, "host_sleep_check", out)
+    return out
+
+
+HOST_SLEEP_MIN_S = 300
 
 
 @activity.defn
@@ -1020,7 +1039,7 @@ async def notify_proposals(batch_key: str, created: int, skipped: list[str]) -> 
 
 ALL_ACTIVITIES = [
     prepare_project, understand_paper, design_and_preregister, implement_experiment, run_pilot, run_main_experiment,
-    analyze_results, research_audit, fix_audit_findings, build_deliverables, publication_audit, refresh_deliverables,
+    analyze_results, research_audit, fix_audit_findings, build_deliverables, publication_audit, refresh_deliverables, host_sleep_check,
     submit_candidate, finalize_project, mark_hold, mark_resumed, rate_limit_wait, set_budget, ingest_papers, select_candidates,
     generate_proposal, notify_proposals,
 ]

@@ -17,6 +17,7 @@ from typing import Any
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
+from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 
 RETRY = RetryPolicy(initial_interval=timedelta(seconds=10), backoff_coefficient=2.0,
                     maximum_interval=timedelta(minutes=5), maximum_attempts=3)
@@ -26,6 +27,7 @@ MAX_RATE_LIMIT_WAITS = 12
 # 新方式: 解除の見込み時刻まで待つ。1つの工程で自動的に待つのはこの回数まで、1回の待ちはこの長さまで。
 # 超える場合は、人が再開するまで止まる（上限を回避するための際限のない再試行はしない）
 MAX_AUTO_RATE_WAITS = 5
+MAX_SLEEP_RETRIES = 2          # PC のスリープによる時間切れで、自動でやり直す回数
 MAX_AUTO_RATE_WAIT = timedelta(hours=8)
 MAX_IMPLEMENT_ATTEMPTS = 3
 # 定期実行は日本時間で動く（service.ensure_schedules の Asia/Tokyo）。日付や週の名前も日本時間で決める。
@@ -149,12 +151,14 @@ class ResearchWorkflow:
     async def _step(self, phase: str, name: str, *args: Any, minutes: int = 90) -> dict[str, Any]:
         """工程を1つ実行する。一時停止・中止・保留をここでまとめて扱う。"""
         rate_waits = 0
+        sleep_retries = 0
         while True:
             if self._cancel:
                 raise _Cancelled()
             if self._paused:
                 await self._wait_resume("paused", "利用者が一時停止した")
             self.s.phase = phase
+            step_started = workflow.now()
             handle = workflow.start_activity(
                 name, args=[self.s.project_id, *args], start_to_close_timeout=timedelta(minutes=minutes),
                 heartbeat_timeout=timedelta(minutes=3), retry_policy=RETRY)
@@ -173,6 +177,18 @@ class ResearchWorkflow:
                 return result
             except ActivityError as e:
                 held = _hold_kind(e)
+                if not held and isinstance(e.cause, TemporalTimeoutError) and workflow.patched("host-sleep-retry"):
+                    # 時間切れの間に PC がスリープしていたなら、実行担当は動けていない。失敗にせず、工程をやり直す
+                    # （回数は限る。スリープが続くなら、人が再開するまで保留にする）
+                    check = await self._quick("host_sleep_check", self.s.project_id, phase, step_started.isoformat(), sleep_retries)
+                    if not check["slept"]:
+                        raise
+                    sleep_retries += 1
+                    if sleep_retries > MAX_SLEEP_RETRIES:
+                        await self._wait_resume("host_sleep", f"この PC のスリープで、工程 {phase} が {sleep_retries} 回続けて時間切れになった。"
+                                                              "スリープしない状態にしてから再開する（aar projects resume）")
+                        sleep_retries = 0
+                    continue
                 if not held:
                     raise
                 kind, message = held

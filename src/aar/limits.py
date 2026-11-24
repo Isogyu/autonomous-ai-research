@@ -118,3 +118,38 @@ class GuardedRunner:
             elif res.ok:
                 clear_limit(conn, self.name)
         return res
+
+
+# ---------------------------------------------------------------------- 実行している PC のスリープ
+
+
+def parse_sleep_seconds(log_text: str, since: dt.datetime, until: dt.datetime) -> int:
+    """`pmset -g log` の出力から、期間内に PC がスリープしていた秒数を数える。"""
+    import re
+
+    asleep_from: dt.datetime | None = None
+    total = 0.0
+    for line in log_text.splitlines():
+        m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) ([+-]\d{4})\s+(Sleep|Wake|DarkWake) *\t", line)   # 「Wake Requests」などの別の種類の行は数えない
+        if not m:
+            continue
+        at = dt.datetime.strptime(m.group(1) + m.group(2), "%Y-%m-%d %H:%M:%S%z")
+        if m.group(3) == "Sleep":
+            asleep_from = asleep_from or at
+        elif asleep_from is not None:
+            total += max(0.0, (min(at, until) - max(asleep_from, since)).total_seconds())
+            asleep_from = None
+    if asleep_from is not None:
+        total += max(0.0, (until - max(asleep_from, since)).total_seconds())
+    return int(total)
+
+
+def host_sleep_seconds(since: dt.datetime, until: dt.datetime | None = None) -> int:
+    """期間内に、この PC がスリープしていた秒数（macOS だけ。調べられなければ 0）。"""
+    import subprocess
+
+    try:
+        out = subprocess.run(["pmset", "-g", "log"], capture_output=True, text=True, timeout=60, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    return parse_sleep_seconds(out, since, until or dt.datetime.now(dt.UTC))
