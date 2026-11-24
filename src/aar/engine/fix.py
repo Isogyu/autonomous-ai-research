@@ -20,7 +20,8 @@ FIX_SCHEMA = _obj({
     "needs_rerun": {"type": "boolean"},
 })
 
-RESEARCH_PATHS = ("experiments/", "results/", "data/", "tests/", "requirements.txt")
+# 研究の中身。事前登録（prereg/）も含める: 変更されたら必ず研究監査に戻す（監査のゲートが、登録後の変更を不合格にする）
+RESEARCH_PATHS = ("experiments/", "results/", "data/", "tests/", "prereg/", "requirements.txt")
 
 
 def touches_research(paths: list[str]) -> bool:

@@ -361,3 +361,8 @@ def test_check_numbers_accepts_figures_quoted_from_the_source_paper(tmp_path):
     (w / "report/report.md").write_text("論文は成功率が 58.33% から 16.67% に下がったと報告している。\n")
     assert check_numbers(w, ["report/report.md"])
     assert not check_numbers(w, ["report/report.md"], ["utility dropped from 58.33% to 16.67%"])
+
+
+def test_preregistration_change_counts_as_a_change_to_the_research():
+    assert touches_research(["prereg/cycle1.json"]) and not touches_code_or_data(["prereg/cycle1.json"])
+    assert not touches_research(["README.md", "docs/limitations.md", "report/report.md"])

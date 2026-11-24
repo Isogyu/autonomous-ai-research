@@ -540,13 +540,63 @@ async def refresh_deliverables(project_id: str, round_no: int) -> dict[str, Any]
     return await _phase(project_id, "deliverables", f"refresh:{round_no}", run)
 
 
+def _final_check(project_id: str, ws: Path, final_commit: str) -> dict[str, Any]:
+    """提出する最終のコミットを検査する。problems が空でなければ提出しない。
+
+    - 公開品質ゲートに合格した監査の対象コミットから、監査の報告（audit/）以外が変わっていないこと
+    - 事前登録が登録時のままであること
+    - 最終の内容に秘密情報が見つからないこと
+    """
+    problems: list[str] = []
+    with connect() as conn:
+        audited = fetch_one(conn, """SELECT a.target_commit, a.round FROM audit_runs a
+                                     JOIN gate_evaluations g ON g.project_id = a.project_id AND g.gate = 'publication' AND g.round = a.round
+                                     WHERE a.project_id = %s AND a.kind = 'publication_quality' AND g.passed
+                                     ORDER BY a.round DESC LIMIT 1""", (project_id,))
+        prereg_ok, prereg_detail = _verify_all_preregs(conn, ws, project_id)
+    outside: list[str] = []
+    if not audited or not audited["target_commit"]:
+        problems.append("公開品質ゲートに合格した監査の記録がない")
+    else:
+        outside = [p for p in wsmod.changed_paths(ws, audited["target_commit"]) if not p.startswith("audit/")]
+        if outside:
+            problems.append(f"監査に合格したコミット {audited['target_commit'][:12]} のあとに、監査の報告以外が変わっている: " + "、".join(outside[:8]))
+    if not prereg_ok:
+        problems.append(f"事前登録が登録時と違う: {prereg_detail}")
+    secrets = wsmod.scan_secrets(ws)
+    if secrets:
+        problems.append(f"最終の内容に秘密情報とみられるものがある（{len(secrets)} 件）")
+    return {"final_commit": final_commit, "audited_commit": audited["target_commit"] if audited else None,
+            "audited_round": audited["round"] if audited else None, "changed_outside_audit": outside,
+            "prereg_intact": prereg_ok, "secrets_found": len(secrets), "problems": problems}
+
+
 @activity.defn
-async def submit_candidate(project_id: str) -> dict[str, Any]:
-    """公開候補を提出する（専用ブランチの push と PR）。push 先がなければローカルのブランチに留める。"""
+async def submit_candidate(project_id: str, round_no: int = 0) -> dict[str, Any]:
+    """公開候補を提出する（専用ブランチの push と PR）。push 先がなければローカルのブランチに留める。
+
+    round_no は合格した公開品質監査の回。回ごとに実行する（やり直して合格した内容を、前回の提出の結果で済ませない）。
+    """
     async def run() -> dict[str, Any]:
         ctx, project, policy = make_ctx(project_id)
         deliv.copy_audit(ctx.ws, sorted(audit_root_of(project_id).glob("*-round*/audit")))
-        wsmod.commit_all(ctx.ws, "独立監査と公開品質監査の報告を追加")
+        final_commit = wsmod.commit_all(ctx.ws, "独立監査と公開品質監査の報告を追加")
+        # 監査に合格したのは、監査の報告を足す前のコミット。提出するのは足したあとのコミットなので、
+        # 最終の内容そのものを検査して、結果を提出に結び付ける
+        final = await asyncio.to_thread(_final_check, project_id, ctx.ws, final_commit)
+        with connect() as conn:
+            store.log_event(conn, project_id, project_id, "final_check", final)
+        (audit_root_of(project_id) / "final_check.json").write_text(json.dumps(final, ensure_ascii=False, indent=2), encoding="utf-8")
+        if final["problems"]:
+            blocked = {"status": "blocked", "reason": "; ".join(final["problems"])[:600], "final_check": final}
+            with connect() as conn:
+                from psycopg.types.json import Jsonb
+                conn.execute(
+                    """INSERT INTO publication_approvals (project_id, channel, decision, decided_by, detail)
+                       VALUES (%s, 'github_pr', 'pending', 'policy', %s)
+                       ON CONFLICT (project_id, channel) DO UPDATE SET decision = EXCLUDED.decision, detail = EXCLUDED.detail""",
+                    (project_id, Jsonb(blocked)))
+            return blocked
         with connect() as conn:
             verdicts = _verdicts(conn, project_id)
             rg = fetch_one(conn, "SELECT checks FROM gate_evaluations WHERE project_id = %s AND gate = 'research' ORDER BY round DESC LIMIT 1", (project_id,))
@@ -571,11 +621,11 @@ async def submit_candidate(project_id: str) -> dict[str, Any]:
                 """INSERT INTO publication_approvals (project_id, channel, decision, decided_by, detail)
                    VALUES (%s, 'github_pr', %s, 'policy', %s)
                    ON CONFLICT (project_id, channel) DO UPDATE SET decision = EXCLUDED.decision, detail = EXCLUDED.detail""",
-                (project_id, decision, Jsonb(result)))
+                (project_id, decision, Jsonb(result | {"final_check": final})))
             if result.get("url"):
                 store.set_project(conn, project_id, pr_url=result["url"])
         return result
-    return await _phase(project_id, "submit", "submit", run)
+    return await _phase(project_id, "submit", f"submit:{round_no}" if round_no else "submit", run)
 
 
 @activity.defn
@@ -634,7 +684,7 @@ async def mark_hold(project_id: str, kind: str, message: str, seq: int) -> None:
         store.set_project(conn, project_id, status="on_hold", outcome_reason=f"[{kind}] {message}"[:1000])
         store.log_event(conn, project_id, project_id, "on_hold", {"kind": kind, "message": message}, key=f"{project_id}:hold:{seq}")
         title = {"auth": "認証が必要", "budget": "費用上限に到達", "policy_changed": "方針ファイルが変更された",
-                 "rate_limit": "利用上限のため待機", "setup": "設定が不足", "resource": "ディスクの空きが不足", "paused": "一時停止"}.get(kind, "保留")
+                 "rate_limit": "利用上限のため待機", "setup": "設定が不足", "resource": "ディスクの空きが不足", "paused": "一時停止", "prereg_changed": "事前登録が変更された"}.get(kind, "保留")
         store.notify(conn, project_id, "warning", f"{title}: {project['title'][:50]}", message[:500],
                      f"{project_id}:hold:{seq}", macos=bool(load_policy().notify.get("macos", True)))
 

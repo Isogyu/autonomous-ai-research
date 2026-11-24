@@ -211,3 +211,49 @@ async def test_reopen_continues_from_audit_with_same_gates(stack):
     assert kinds == ["select", "reopen"]                                    # 人の介入として記録される
     with pytest.raises(ValueError):
         await service.reopen_project(pid)                                    # 公開可で終わった研究は再開できない
+
+
+async def test_fix_that_touches_preregistration_holds_and_never_passes(stack, monkeypatch):
+    """修正担当が事前登録を変えたら、その場で保留にする。再開しても研究監査に戻り、ゲートは通らない。"""
+    from aar import service
+    from aar.db.core import connect, fetch_all
+
+    monkeypatch.setenv("AAR_MOCK_FIX", "prereg")
+    proposal_id = await _proposal(stack)
+    pid = (await service.select_and_start(proposal_id))["id"]
+    p = await _wait(pid, ("completed", "failed", "on_hold"), timeout=180)
+    assert p["status"] == "on_hold" and "[prereg_changed]" in p["outcome_reason"], p["outcome_reason"]
+    monkeypatch.delenv("AAR_MOCK_FIX")                                     # 以後の修正は事前登録に触れない（が、変更の履歴は残る）
+    await service.control_project(pid, "resume")
+    p = await _wait(pid, ("completed", "failed"), timeout=180)
+    assert p["outcome"] == "not_publishable" and "事前登録" in p["outcome_reason"], p["outcome_reason"]
+    with connect() as conn:
+        submitted = fetch_all(conn, "SELECT 1 FROM workflow_events WHERE project_id = %s AND event = 'final_check'", (pid,))
+    assert not submitted                                                   # 提出の工程までは進まない
+
+
+async def test_content_changed_after_the_audit_blocks_submission(stack, monkeypatch):
+    """監査に合格したあとで公開候補が変わっていたら（監査の報告の追加を除く）、提出せず、公開可にしない。"""
+    import json
+    from pathlib import Path
+
+    from aar import service
+    from aar.db.core import connect, fetch_one
+    from aar.publish import deliverables as deliv
+
+    original = deliv.copy_audit
+
+    def leaky(ws, dirs):
+        original(ws, dirs)
+        if any("publication-round" in str(d) for d in dirs):   # 提出の直前（監査のあと）にだけ、監査していない変更が入る
+            (ws / "README.md").write_text((ws / "README.md").read_text(encoding="utf-8") + "\n監査のあとに足した主張。\n", encoding="utf-8")
+    monkeypatch.setattr(deliv, "copy_audit", leaky)
+    proposal_id = await _proposal(stack)
+    pid = (await service.select_and_start(proposal_id))["id"]
+    p = await _wait(pid, ("completed", "failed"), timeout=180)
+    assert p["outcome"] == "not_publishable" and "README.md" in p["outcome_reason"], p["outcome_reason"]
+    final = json.loads((Path(p["workspace_path"]).parent / "audits" / "final_check.json").read_text(encoding="utf-8"))
+    assert final["changed_outside_audit"] == ["README.md"] and final["prereg_intact"] and final["final_commit"] != final["audited_commit"]
+    with connect() as conn:
+        appr = fetch_one(conn, "SELECT decision, detail FROM publication_approvals WHERE project_id = %s", (pid,))
+    assert appr["decision"] == "pending" and appr["detail"]["status"] == "blocked"

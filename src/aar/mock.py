@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -134,6 +135,10 @@ def _claude(prompt: str, cwd: Path, schema: dict[str, Any] | None) -> dict[str, 
                 "next": {"continue": False, "expected_information_gain": 0.1, "rationale": "追加で分かることは少ない",
                          "next_hypotheses": [], "next_design_changes": ""}}
     if "not_fixed" in props:
+        if os.environ.get("AAR_MOCK_FIX") == "prereg":   # 異常系のテスト用: 修正担当が事前登録を書き換える
+            target = sorted((cwd / "prereg").glob("cycle*.json"))[-1]
+            target.write_text(target.read_text(encoding="utf-8").rstrip("\n") + "\n \n", encoding="utf-8")
+            return {"fixed": [{"issue_id": "P101", "what_changed": "判定基準を書き直した"}], "not_fixed": [], "needs_rerun": False}
         if (cwd / "experiments/analyze.py").exists() and "len(t) // 2" in (cwd / "experiments/analyze.py").read_text():
             _files(cwd, {"experiments/analyze.py": ANALYZE_FIXED})
             return {"fixed": [{"issue_id": "I001", "what_changed": "処置群の全試行で平均を計算するよう修正"}], "not_fixed": [],
