@@ -22,6 +22,19 @@ FIX_SCHEMA = _obj({
 
 # 研究の中身。事前登録（prereg/）も含める: 変更されたら必ず研究監査に戻す（監査のゲートが、登録後の変更を不合格にする）
 RESEARCH_PATHS = ("experiments/", "results/", "data/", "tests/", "prereg/", "requirements.txt")
+IMPACT_PATHS = ("experiments", "results", "data", "tests", "prereg", "requirements.txt")
+
+
+def research_tree(ws: Any, rev: str) -> dict[str, str]:
+    """研究の中身（実験コード・結果・データ・テスト・事前登録・依存）の、あるコミットでの Git のハッシュ。
+
+    修正の前後でこれが同じなら、研究の中身は1バイトも変わっていない。
+    """
+    out = {}
+    for path in IMPACT_PATHS:
+        sha = wsmod.git(ws, "rev-parse", "--verify", "--quiet", f"{rev}:{path}", check=False).strip()
+        out[path] = sha or "(なし)"
+    return out
 
 
 def touches_research(paths: list[str]) -> bool:
@@ -51,13 +64,29 @@ async def fix_findings(ctx: Ctx, findings: list[dict[str, Any]], *, kind: str, r
 - 結果の数値（`results/` 以下）を手で書き換えない。コードを直したら needs_rerun を true にする（再実行はオーケストレーターが行う）。
 - 結論が証拠を超えているという指摘には、結論の書き方を弱めて対応する。
 - 直せない指摘を直したと書かない。
+- `docs/third_party_licenses.md` と `docs/license_evidence.json` がある場合、それはオーケストレーターが提供元から取得した
+  ライセンス表示の記録である。編集しない。ライセンスやデータの利用条件についての記述は、この記録にある範囲で書き、
+  記録に無いことを確認済みと書かない。
 """
+    # 修正担当に渡した内容（指摘と証拠）を、証跡として残す
+    record = ctx.ws.parent / "audits" / f"fix-{kind}-round{round_no}"
+    record.mkdir(parents=True, exist_ok=True)
+    (record / "prompt.md").write_text(prompt, encoding="utf-8")
+    (record / "handed_findings.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     res = await ctx.ask("fixer", f"修正（{kind}）", f"{ctx.project_id}:fix:{kind}:{round_no}", prompt,
                         schema=FIX_SCHEMA, writable=True, budget=3.0)
     after = wsmod.commit_all(ctx.ws, f"監査の指摘への対応（{kind}、{round_no}回目）")
     changed = wsmod.changed_paths(ctx.ws, before) if after != before else []
     out = res.structured or {}
+    tree_before, tree_after = research_tree(ctx.ws, before), research_tree(ctx.ws, after)
+    impact = {"before_commit": before, "after_commit": after, "session_id": res.session_id,
+              "handed_issue_ids": [r["issue_id"] for r in rows],
+              "research_paths_changed": sorted(k for k in tree_before if tree_before[k] != tree_after[k]),
+              "tree_before": tree_before, "tree_after": tree_after}
+    (record / "result.json").write_text(json.dumps({"changed_paths": changed, "impact": impact, "fixed": out.get("fixed", []),
+                                                    "not_fixed": out.get("not_fixed", [])}, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
+        "impact": impact,
         "changed_paths": changed,
         "research_changed": touches_research(changed),
         "needs_rerun": touches_code_or_data(changed),

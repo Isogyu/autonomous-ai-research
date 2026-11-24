@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# 基盤の起動・停止。使い方: scripts/aarctl start|stop|status|logs
+# 基盤の起動・停止。使い方: scripts/aarctl start|stop|restart-worker|status|logs
+# AAR_KEEP_AWAKE=1 を付けて起動すると、ワーカーが動いている間は Mac の自動スリープを抑える（caffeinate。
+# 電源につないでいるときだけ有効。ふたを閉じたときのスリープは防げない）。スリープ中は待ち時間のタイマーも進まない。
 # PostgreSQL は Docker、Temporal は単体サーバー（履歴は var/temporal.db に永続化）、ワーカーと UI は Python。
 # 止めても、研究の状態は PostgreSQL と Temporal の履歴に残り、start で続きから再開される。
 set -euo pipefail
@@ -29,24 +31,39 @@ stop_one() {
   rm -f "$VAR/run/$name.pid"
 }
 
+keep_awake() {
+  if [ "${AAR_KEEP_AWAKE:-0}" = "1" ] && command -v caffeinate >/dev/null 2>&1 && running worker; then
+    launch awake caffeinate -i -s -w "$(cat "$VAR/run/worker.pid")"
+  fi
+}
+
 case "${1:-}" in
+  restart-worker)
+    # コードや設定を変えたあとに、ワーカーだけを入れ替える。実行中の工程は打ち切られ、続きから自動でやり直される
+    stop_one awake; stop_one worker
+    "$PY" -m aar.cli migrate
+    launch worker "$PY" -m aar.cli worker
+    keep_awake
+    ;;
   start)
     docker compose -f infra/docker-compose.yml up -d --wait
     launch temporal temporal server start-dev --db-filename "$VAR/temporal.db" --ip 127.0.0.1 --port 7233 --ui-port 8233 --log-level warn
     for _ in $(seq 1 30); do temporal operator cluster health --address 127.0.0.1:7233 >/dev/null 2>&1 && break; sleep 1; done
     "$PY" -m aar.cli migrate
     launch worker "$PY" -m aar.cli worker
+    keep_awake
     launch ui "$PY" -m aar.cli ui
     echo "UI: http://127.0.0.1:${AAR_UI_PORT:-8765}  /  Temporal: http://127.0.0.1:8233"
     ;;
   stop)
-    stop_one ui; stop_one worker; stop_one temporal
+    stop_one awake; stop_one ui; stop_one worker; stop_one temporal
     if [ "${2:-}" = "--all" ]; then docker compose -f infra/docker-compose.yml stop; fi
     ;;
   status)
     for n in temporal worker ui; do running "$n" && echo "$n: 稼働中" || echo "$n: 停止"; done
+    running awake && echo "awake: 自動スリープを抑止中" || true
     docker compose -f infra/docker-compose.yml ps --format '{{.Name}}: {{.Status}}'
     ;;
   logs) tail -n "${3:-50}" "$VAR/log/${2:-worker}.log" ;;
-  *) echo "使い方: $0 start|stop [--all]|status|logs [temporal|worker|ui] [行数]"; exit 1 ;;
+  *) echo "使い方: $0 start|stop [--all]|restart-worker|status|logs [temporal|worker|ui] [行数]"; exit 1 ;;
 esac

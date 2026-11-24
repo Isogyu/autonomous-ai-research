@@ -29,6 +29,8 @@ log = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------ 収集
 
+ARXIV_MIN_LOOKBACK_DAYS = 7
+
 
 async def collect_all(
     ingest: IngestPolicy, settings: Settings, today: date
@@ -38,13 +40,17 @@ async def collect_all(
     1つの情報源の失敗は errors に積んで続行する。
     """
     since = today - timedelta(days=ingest.lookback_days)
+    # arXiv の検索 API は、投稿が索引に載るまで数日遅れることがあり、週末は新しい投稿が載らない
+    # （2026-11-24 火曜の時点で、最新は 11-20 金曜の投稿だった）。短い期間だけを見ると 0 件が続くので、
+    # arXiv だけは少なくとも ARXIV_MIN_LOOKBACK_DAYS 日さかのぼる。保存は同じ論文を上書きするので、重なっても増えない
+    arxiv_since = today - timedelta(days=max(ingest.lookback_days, ARXIV_MIN_LOOKBACK_DAYS))
     records: list[PaperRecord] = []
     errors: list[str] = []
     for topic in ingest.topics:
         name, query = topic.get("name", ""), topic.get("query", "")
         try:
             records += await search_arxiv(
-                query, ingest.arxiv_categories, since, today, ingest.max_per_query
+                query, ingest.arxiv_categories, arxiv_since, today, ingest.max_per_query
             )
         except Exception as e:
             errors.append(f"arxiv[{name}]: {e!r}")

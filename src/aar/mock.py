@@ -147,6 +147,15 @@ def _claude(prompt: str, cwd: Path, schema: dict[str, Any] | None) -> dict[str, 
         if readme.exists() and "## 引用" not in readme.read_text(encoding="utf-8"):
             readme.write_text(readme.read_text(encoding="utf-8") + "\n## 引用\n\n（モック）原論文の書誌。\n", encoding="utf-8")
             return {"fixed": [{"issue_id": "P101", "what_changed": "README に引用の節を追加"}], "not_fixed": [], "needs_rerun": False}
+        from aar.fixture import OVERCLAIM_README, OVERCLAIM_REPORT
+        cleaned = False
+        for rel, block in (("README.md", OVERCLAIM_README), ("report/report.md", OVERCLAIM_REPORT)):
+            f = cwd / rel
+            if f.exists() and block in f.read_text(encoding="utf-8"):
+                f.write_text(f.read_text(encoding="utf-8").replace(block, ""), encoding="utf-8")
+                cleaned = True
+        if cleaned:
+            return {"fixed": [{"issue_id": "P102", "what_changed": "証拠を超える主張を取り除いた"}], "not_fixed": [], "needs_rerun": False}
         return {"fixed": [], "not_fixed": [], "needs_rerun": False}
     if "files_written" in props:   # 成果物
         body = "\n\n".join(f"## {s}\n\n（モック）{s}の内容。" + ("\n\n<!-- AAR:RESULTS -->\n\n<!-- AAR:FIGURES -->" if s == "実験結果" else "")
@@ -240,11 +249,12 @@ def _formal_publication_audit(target: Path) -> dict[str, Any]:
 
     環境変数 AAR_MOCK_PUB で、正常でない結果を返させることができる（異常系のテスト用）。
       inconsistent: Critical の指摘があるのに判定 A / bad_sum: 合計の検算が合わない / wrong_commit: 対象コミットが違う
+      unverified: 必須項目の1つを未確認と申告する（結果は正常だが、ゲートは通らない）
     """
     import os
     import subprocess
 
-    from aar.audit.publication import REPORT_SECTIONS, SKILL_FILES, SUB_CAPS
+    from aar.audit.publication import REPORT_SECTIONS, REQUIRED_ATTEST, SKILL_FILES, SUB_CAPS
 
     fault = os.environ.get("AAR_MOCK_PUB", "")
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=target, capture_output=True, text=True).stdout.strip()
@@ -259,6 +269,12 @@ def _formal_publication_audit(target: Path) -> dict[str, Any]:
         issues.append({"id": "P101", "severity": "Major", "certainty": "確認済み", "location": "README.md",
                        "evidence": "引用の節がない", "impact": "原論文への帰属が示されていない", "proposed_fix": "引用の節を追加する",
                        "blocks_publication": True, "changes_research_content": False})
+    if "完全に証明された" in readme:
+        issues.append({"id": "P102", "severity": "Major", "certainty": "確認済み", "location": "README.md:2",
+                       "evidence": "「完全に証明された」「限界は見つかっていない」とあるが、結果はシミュレーションで、限界の節もある",
+                       "impact": "証拠を超える主張", "proposed_fix": "証拠の範囲に合わせて書き直す",
+                       "blocks_publication": True, "changes_research_content": False})
+        next(s for s in scores if s["item"] == "rv_conclusion")["score"] = 1
     verdict = "C" if issues else "A"
     if fault == "inconsistent":
         issues.append({"id": "P199", "severity": "Critical", "certainty": "確認済み", "location": "x", "evidence": "x",
@@ -273,6 +289,8 @@ def _formal_publication_audit(target: Path) -> dict[str, Any]:
         "linkedin_verdict": "修正・確認後に可" if issues else "投稿可", "main_claims_supported": True, "issues": issues,
         "unchecked_scope": ["（モック）Git の履歴の全件"], "linkedin_claims": [{"claim": "（モック）", "evidence": "x", "caveats": "x"}],
         "claims_to_avoid": ["（モック）一般化"], "recommendations": ["（モック）"], "tests_executed_by_auditor": False,
+        "required_checks": [{"item": k, "status": "未確認" if fault == "unverified" and k == "rq_third_party_content" else "問題なし",
+                             "evidence": "（モック）対象のファイルと履歴を調べた", "issue_ids": []} for k, _, _ in REQUIRED_ATTEST],
     }
 
 
@@ -286,6 +304,7 @@ def mock_papers() -> list[PaperRecord]:
         source="arxiv", source_id=f"0000.0000{i}v1", arxiv_id=f"0000.0000{i}", arxiv_version=1,
         title=f"(Mock) A lightweight evaluation benchmark for coding agents, part {i}",
         abstract="(Mock paper for pipeline tests.) We release an open-source benchmark and evaluation harness for agent "
-                 "reliability with ablation analysis. Code is available.",
+                 "reliability with ablation analysis. Code is available. The benchmark contains small synthetic tasks, "
+                 "a fixed random seed, and paired comparisons between a baseline and a treatment condition.",
         authors=["Mock Author"], published_at=now.date(), source_updated_at=now, peer_review_status="preprint",
         categories=["cs.AI"], url=f"https://example.invalid/abs/0000.0000{i}", retrieved_at=now) for i in (1, 2)]

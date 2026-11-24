@@ -21,9 +21,21 @@ from temporalio.exceptions import ActivityError, ApplicationError
 RETRY = RetryPolicy(initial_interval=timedelta(seconds=10), backoff_coefficient=2.0,
                     maximum_interval=timedelta(minutes=5), maximum_attempts=3)
 QUICK = RetryPolicy(initial_interval=timedelta(seconds=2), maximum_interval=timedelta(minutes=1), maximum_attempts=10)
-RATE_LIMIT_WAIT = timedelta(minutes=30)
+RATE_LIMIT_WAIT = timedelta(minutes=30)      # 旧方式（一定間隔）。実行中だった研究の再生のために残す
 MAX_RATE_LIMIT_WAITS = 12
+# 新方式: 解除の見込み時刻まで待つ。1つの工程で自動的に待つのはこの回数まで、1回の待ちはこの長さまで。
+# 超える場合は、人が再開するまで止まる（上限を回避するための際限のない再試行はしない）
+MAX_AUTO_RATE_WAITS = 5
+MAX_SLEEP_RETRIES = 2          # PC のスリープによる時間切れで、自動でやり直す回数
+MAX_AUTO_RATE_WAIT = timedelta(hours=8)
 MAX_IMPLEMENT_ATTEMPTS = 3
+# 定期実行は日本時間で動く（service.ensure_schedules の Asia/Tokyo）。日付や週の名前も日本時間で決める。
+# UTC のままだと、朝の実行が「前日」「前週」の名前になり、前回の記録と同じ鍵になってしまう
+LOCAL_UTC_OFFSET = timedelta(hours=9)
+
+
+def local_now() -> Any:
+    return workflow.now() + LOCAL_UTC_OFFSET
 
 
 @dataclass
@@ -138,12 +150,14 @@ class ResearchWorkflow:
     async def _step(self, phase: str, name: str, *args: Any, minutes: int = 90) -> dict[str, Any]:
         """工程を1つ実行する。一時停止・中止・保留をここでまとめて扱う。"""
         rate_waits = 0
+        sleep_retries = 0
         while True:
             if self._cancel:
                 raise _Cancelled()
             if self._paused:
                 await self._wait_resume("paused", "利用者が一時停止した")
             self.s.phase = phase
+            step_started = workflow.now()
             handle = workflow.start_activity(
                 name, args=[self.s.project_id, *args], start_to_close_timeout=timedelta(minutes=minutes),
                 heartbeat_timeout=timedelta(minutes=3), retry_policy=RETRY)
@@ -162,10 +176,39 @@ class ResearchWorkflow:
                 return result
             except ActivityError as e:
                 held = _hold_kind(e)
+                if not held and workflow.patched("host-sleep-retry"):
+                    # 工程の間に PC がスリープしていたなら、実行担当は動けていない。失敗にせず、工程をやり直す
+                    # （回数は限る。スリープが続くなら、人が再開するまで保留にする）。
+                    # Temporal の時間切れに限らない: 実行担当の CLI が自分の制限時間で打ち切られると、
+                    # 「監査の結果が正常でない」「工程の失敗」という別の種類の失敗として届く
+                    check = await self._quick("host_sleep_check", self.s.project_id, phase, step_started.isoformat(), sleep_retries)
+                    if not check["slept"]:
+                        raise
+                    sleep_retries += 1
+                    if sleep_retries > MAX_SLEEP_RETRIES:
+                        await self._wait_resume("host_sleep", f"この PC のスリープで、工程 {phase} が {sleep_retries} 回続けて時間切れになった。"
+                                                              "スリープしない状態にしてから再開する（aar projects resume）")
+                        sleep_retries = 0
+                    continue
                 if not held:
                     raise
                 kind, message = held
-                if kind == "rate_limit":
+                if kind == "rate_limit" and workflow.patched("rate-limit-reset-time"):
+                    rate_waits += 1
+                    plan = await self._quick("rate_limit_wait", self.s.project_id, rate_waits, MAX_AUTO_RATE_WAITS)
+                    wait = timedelta(seconds=int(plan["seconds"]))
+                    if rate_waits > MAX_AUTO_RATE_WAITS:
+                        await self._wait_resume(kind, f"利用上限が {MAX_AUTO_RATE_WAITS} 回待っても解けない。自動の再試行をやめた。"
+                                                      f"利用枠を確かめてから、人が再開する（aar projects resume）: {message}")
+                        rate_waits = 0
+                    elif wait > MAX_AUTO_RATE_WAIT:
+                        await self._wait_resume(kind, f"利用上限の解除の見込みが {plan['until_local']} で、自動で待つ上限を超える。"
+                                                      f"解除後に、人が再開する（aar projects resume）: {message}")
+                    else:
+                        await self._wait_resume(kind, f"利用上限のため {plan['until_local']} ごろまで待って自動で再開する"
+                                                      f"（{rate_waits}/{MAX_AUTO_RATE_WAITS} 回目。それまで問い合わせない）: {message}",
+                                                timeout=wait)
+                elif kind == "rate_limit":
                     rate_waits += 1
                     if rate_waits > MAX_RATE_LIMIT_WAITS:
                         await self._wait_resume(kind, f"利用上限が解けない: {message}")
@@ -352,7 +395,7 @@ class IngestWorkflow:
 
     @workflow.run
     async def run(self, day: str = "") -> dict[str, Any]:
-        day = day or workflow.now().date().isoformat()
+        day = day or local_now().date().isoformat()
         return await workflow.execute_activity(
             "ingest_papers", args=[day], start_to_close_timeout=timedelta(minutes=45),
             heartbeat_timeout=timedelta(minutes=5),
@@ -364,19 +407,22 @@ class ProposalWorkflow:
     """週次の検証企画の生成。"""
 
     @workflow.run
-    async def run(self, batch_key: str = "") -> dict[str, Any]:
+    async def run(self, batch_key: str = "", prefer_public_data: bool = False, paper_ids: list[str] | None = None) -> dict[str, Any]:
         if not batch_key:
-            iso = workflow.now().isocalendar()
+            iso = local_now().isocalendar()
             batch_key = f"{iso.year}-W{iso.week:02d}"
         retry = RetryPolicy(initial_interval=timedelta(minutes=1), maximum_attempts=3)
-        papers: list[str] = await workflow.execute_activity(
-            "select_candidates", args=[batch_key], start_to_close_timeout=timedelta(minutes=60),
-            heartbeat_timeout=timedelta(minutes=5), retry_policy=retry)
+        if paper_ids:       # 論文を指定した生成（利用者の操作）
+            papers: list[str] = list(paper_ids)
+        else:
+            papers = await workflow.execute_activity(
+                "select_candidates", args=[batch_key], start_to_close_timeout=timedelta(minutes=60),
+                heartbeat_timeout=timedelta(minutes=5), retry_policy=retry)
         created, skipped = 0, []
         for pid in papers:
             try:
                 r = await workflow.execute_activity(
-                    "generate_proposal", args=[batch_key, pid], start_to_close_timeout=timedelta(minutes=15),
+                    "generate_proposal", args=[batch_key, pid, prefer_public_data], start_to_close_timeout=timedelta(minutes=15),
                     heartbeat_timeout=timedelta(minutes=3), retry_policy=retry)
                 if r.get("created"):
                     created += 1

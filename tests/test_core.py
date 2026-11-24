@@ -81,8 +81,13 @@ def test_publication_gate():
                       score=85, publication_verdict="A",
                       checks={"claims_grounded": True, "formal_skill": True, "publication_hold": False})
     args = dict(secrets_found=0, has_limitations=True, has_repro=True, has_license=True, tests_passed=True,
-                claims_grounded=True, pinned_policy_sha="a", current_policy_sha="a")
+                claims_grounded=True, pinned_policy_sha="a", current_policy_sha="a", required_violations=[], required_unverified=[])
     assert gates.evaluate_publication_gate(GatePublication(), rep, **args).passed
+    # 公開前の必須項目: 違反・未確認・検査していない、のどれでも通らない（点数や判定がよくても）
+    for bad in ({"required_violations": ["third_party_text"]}, {"required_unverified": ["rq_license"]},
+                {"required_violations": None}, {"required_unverified": None}):
+        r = gates.evaluate_publication_gate(GatePublication(), rep, **(args | bad))
+        assert not r.passed and "必須項目" in r.blocking()[0].name
     assert not gates.evaluate_publication_gate(GatePublication(), rep, **(args | {"secrets_found": 1})).passed
     assert not gates.evaluate_publication_gate(GatePublication(), rep, **(args | {"claims_grounded": False})).passed
     assert not gates.evaluate_publication_gate(GatePublication(), rep.model_copy(update={"score": 79.9}), **args).passed
@@ -368,13 +373,15 @@ def test_check_numbers_accepts_figures_quoted_from_the_source_paper(tmp_path):
 
 
 def _skill_result(**over):
-    from aar.audit.publication import REPORT_SECTIONS, SKILL_FILES, SUB_CAPS
+    from aar.audit.publication import REPORT_SECTIONS, REQUIRED_ATTEST, SKILL_FILES, SUB_CAPS
 
     scores = [{"item": k, "score": cap, "pending": 0, "reason": ""} for k, cap in SUB_CAPS.items()]
     base = {"skill_files_read": list(SKILL_FILES), "mode": "audit", "head_commit": "a" * 40,
             "report_markdown": "\n".join(f"## {s}" for s in REPORT_SECTIONS), "scores": scores, "total_confirmed": 100,
             "total_pending": 0, "github_verdict": "A", "publication_hold": False, "linkedin_verdict": "投稿可",
-            "issues": [], "tests_executed_by_auditor": False}
+            "issues": [], "tests_executed_by_auditor": False,
+            "required_checks": [{"item": k, "status": "問題なし", "evidence": "git log -p --all と全ファイルを調べた", "issue_ids": []}
+                                for k, _, _ in REQUIRED_ATTEST]}
     return base | over
 
 
@@ -421,7 +428,7 @@ def test_skill_result_validation_checks_score_ranges_and_execution_log():
 
 def test_publication_gate_requires_formal_skill_and_its_verdict():
     args = dict(secrets_found=0, has_limitations=True, has_repro=True, has_license=True, tests_passed=True,
-                claims_grounded=True, pinned_policy_sha="a", current_policy_sha="a")
+                claims_grounded=True, pinned_policy_sha="a", current_policy_sha="a", required_violations=[], required_unverified=[])
 
     def rep(**kw):
         base = dict(kind="publication_quality", status="completed", auditor="codex:default", skill="repo-publication-audit@x",
@@ -586,6 +593,362 @@ def test_copied_audit_record_omits_paper_abstract_and_local_paths(tmp_path):
     assert "ABSTRACT TEXT" not in json.dumps(copied, ensure_ascii=False) and copied["doi"] == "10.1/x" and copied["取得記録"]
     assert str(tmp_path) not in (ws / "audit/research-round1/evidence.csv").read_text()
     assert "ABSTRACT TEXT" in (audit / "source_evidence" / "paper_record.json").read_text()       # 原本はそのまま
+
+
+# ------------------------------------------------------------------ 公開前の必須項目（決定的な検査）
+
+ABSTRACT = ("We study how evaluation harnesses for tool-using language agents inflate reported accuracy when the retrieval "
+            "index contains post-outcome fields, and we show that a simple order-level split removes most of the effect. "
+            "Across four public benchmarks the headline number drops by more than half once duplicated orders are removed, "
+            "which suggests that many published comparisons measure memorisation of leaked attributes rather than skill. "
+            "We release the harness, the split definitions, and a checklist that practitioners can apply before reporting.")
+
+
+def _repo(tmp_path, files: dict[str, str]):
+    from aar import workspace as wsmod
+
+    ws = tmp_path / "repo"
+    ws.mkdir()
+    wsmod.git(ws, "init", "-q", "-b", "main")
+    wsmod.git(ws, "config", "user.email", "1+someone@users.noreply.github.com")
+    wsmod.git(ws, "config", "user.name", "tester")
+    for rel, text in files.items():
+        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / rel).write_text(text, encoding="utf-8")
+    wsmod.git(ws, "add", "-A")
+    wsmod.git(ws, "commit", "-q", "-m", "init")
+    return ws
+
+
+MIT = "MIT License\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\n"
+BASE = {"LICENSE": MIT, "README.md": "# x\n\n## ライセンス\nMIT\n", "experiments/run.py": "a = h@l.T  # 行列積はメールアドレスではない\n"}
+
+
+def test_required_checks_pass_on_clean_repo_and_are_deterministic(tmp_path):
+    from aar.publish import required as req
+
+    ws = _repo(tmp_path, BASE | {"docs/paper_review.md": "この論文は、" + ABSTRACT[:120] + "…と述べている（短い引用）。\n"})
+    a = req.run_required_checks(ws, [("原論文の要旨", ABSTRACT)])
+    b = req.run_required_checks(ws, [("原論文の要旨", ABSTRACT)])
+    assert a["violations"] == [] and a["unverified"] == [] and a["digest"] == b["digest"]
+
+
+def test_required_checks_find_copied_abstract_in_files_and_in_history(tmp_path):
+    """要旨の丸写しは、空白や改行の入り方が違っても、JSON の中でも見つける。消しても履歴に残っていれば見つける。"""
+    import json as _json
+
+    from aar import workspace as wsmod
+    from aar.publish import required as req
+
+    wrapped = ABSTRACT.replace(". ", ".\n")
+    ws = _repo(tmp_path, BASE | {"audit/paper_record.json": _json.dumps({"要旨": wrapped}, ensure_ascii=False, indent=2)})
+    item = next(i for i in req.run_required_checks(ws, [("原論文の要旨", ABSTRACT)])["items"] if i["id"] == "third_party_text")
+    assert item["status"] == "violation" and "現在のファイル" in item["evidence"][0] and "paper_record.json" in item["evidence"][0]
+    (ws / "audit" / "paper_record.json").write_text("{}", encoding="utf-8")
+    wsmod.git(ws, "commit", "-q", "-am", "要旨を除く")
+    item = next(i for i in req.run_required_checks(ws, [("原論文の要旨", ABSTRACT)])["items"] if i["id"] == "third_party_text")
+    assert item["status"] == "violation" and "過去のコミットだけ" in item["evidence"][0]
+    # 照合する文章が手元になければ「問題なし」とは言わない
+    assert req.check_third_party_text(ws, [])["status"] == "unverified"
+
+
+def test_required_checks_personal_info_license_and_data(tmp_path):
+    from aar import workspace as wsmod
+    from aar.publish import required as req
+
+    ws = _repo(tmp_path, BASE | {"docs/contact.md": "連絡先: taro.yamada@gmail.com\n", "data/external/train.csv": "a,b\n1,2\n"})
+    out = {i["id"]: i for i in req.run_required_checks(ws, [("原論文の要旨", ABSTRACT)])["items"]}
+    assert out["personal_info"]["status"] == "violation" and "docs/contact.md:1" in out["personal_info"]["evidence"][0]
+    assert "gmail" not in str(out["personal_info"]["evidence"])              # 値そのものは記録しない
+    assert out["third_party_data"]["status"] == "violation"                  # 第三者のデータが Git に入っている
+    (ws / "LICENSE").write_text("好きに使ってよい\n", encoding="utf-8")
+    assert req.check_license(ws)["status"] == "unverified"                   # 種別を確かめられないライセンスは、確認済みにしない
+    (ws / "LICENSE").unlink()
+    assert req.check_license(ws)["status"] == "violation"
+    wsmod.git(ws, "config", "user.email", "taro@gmail.com")
+    wsmod.git(ws, "commit", "-q", "--allow-empty", "-m", "x")
+    assert any("コミットの記録" in e for e in req.check_personal_info(ws)["evidence"])
+
+
+def _mock_skill_result(**over):
+    import subprocess as sp
+    import tempfile
+
+    from aar import mock
+    d = Path(tempfile.mkdtemp())
+    sp.run(["git", "init", "-q"], cwd=d, check=True)
+    (d / "README.md").write_text("## 引用\n", encoding="utf-8")
+    sp.run(["git", "add", "-A"], cwd=d, check=True)
+    sp.run(["git", "-c", "user.email=a@example.com", "-c", "user.name=a", "commit", "-q", "-m", "x"], cwd=d, check=True)
+    s = mock._formal_publication_audit(d)
+    return s | over, s["head_commit"]
+
+
+def test_skill_result_must_attest_every_required_item():
+    from aar.audit import publication as pub
+
+    s, head = _mock_skill_result()
+    assert pub.validate_skill_result(s, commit=head, execution_log=None) == []
+    missing = s | {"required_checks": s["required_checks"][1:]}
+    assert any("rq_secrets" in p for p in pub.validate_skill_result(missing, commit=head, execution_log=None))
+    lazy = s | {"required_checks": [r | {"evidence": ""} for r in s["required_checks"]]}
+    assert any("調べた方法" in p for p in pub.validate_skill_result(lazy, commit=head, execution_log=None))
+    claims_problem = s | {"required_checks": [r | {"status": "問題あり"} if r["item"] == "rq_license" else r for r in s["required_checks"]]}
+    assert any("対応する指摘がない" in p for p in pub.validate_skill_result(claims_problem, commit=head, execution_log=None))
+    # 「未確認」は結果としては正常（正直な申告）。ただし未確認として数えられ、ゲートは通らない
+    unverified = s | {"required_checks": [r | {"status": "未確認"} if r["item"] == "rq_data_rights" else r for r in s["required_checks"]]}
+    assert pub.validate_skill_result(unverified, commit=head, execution_log=None) == []
+    assert pub.unattested({"required_attestation": unverified["required_checks"]}) == ["rq_data_rights"]
+    assert pub.unattested({}) == [k for k, _, _ in pub.REQUIRED_ATTEST]
+
+
+# ------------------------------------------------------------------ 利用上限
+
+
+def test_parse_retry_at():
+    import datetime as dt
+
+    from aar.agents.runner import parse_retry_at
+
+    now = dt.datetime(2026, 11, 23, 18, 3, tzinfo=dt.UTC)     # 日本時間 11/24 03:03
+    local = now.astimezone()
+    msg = "You’ve hit your usage limit. Upgrade to Pro, or try again at 5:20 AM."
+    at = parse_retry_at(msg, now).astimezone()
+    assert (at.hour, at.minute) == (5, 20) and dt.timedelta(0) < at - local <= dt.timedelta(days=1)
+    assert parse_retry_at("usage limit reached. Try again in 2 hours 5 minutes.", now) == now + dt.timedelta(hours=2, minutes=5)
+    assert parse_retry_at("Please try again in 45s", now) == now + dt.timedelta(seconds=45)
+    assert parse_retry_at("rate limit exceeded", now) is None
+    assert parse_retry_at("try again at 99:99", now) is None
+
+
+@pytest.mark.db
+def test_rate_limit_state_blocks_calls_until_reset(db_url, monkeypatch):
+    """上限に達したら、解除の見込み時刻までは相手を呼び出さない。時刻が示されなければ間隔を倍々に延ばす。"""
+    import asyncio
+    import datetime as dt
+
+    import psycopg
+    from psycopg.rows import dict_row
+
+    from aar import config, limits
+    from aar.models import AgentResult
+
+    monkeypatch.setenv("AAR_DATABASE_URL", db_url)
+    config.get_settings.cache_clear()
+    now = dt.datetime(2026, 11, 24, 0, 0, tzinfo=dt.UTC)
+    with psycopg.connect(db_url, autocommit=True, row_factory=dict_row) as conn:
+        assert limits.limited_until(conn, "codex", now) is None
+        until = limits.note_limit(conn, "codex", now + dt.timedelta(hours=2), "try again at ...", now)
+        assert until == now + dt.timedelta(hours=2, seconds=120)             # 示された時刻＋余裕
+        assert limits.limited_until(conn, "codex", now + dt.timedelta(hours=1)) == until
+        assert limits.limited_until(conn, "codex", until + dt.timedelta(seconds=1)) is None
+        assert limits.limited_until(conn, "claude", now) is None             # 担当ごとに別
+        waits = []
+        t = now
+        for _ in range(6):                                                   # 時刻が示されない場合
+            u = limits.note_limit(conn, "claude", None, "rate limit", t)
+            waits.append(int((u - t).total_seconds() // 60))
+            t = u
+        assert waits == [15, 30, 60, 120, 240, 240]
+        plan = limits.wait_plan(conn, "RP-x", now)
+        assert plan["seconds"] >= 2 * 3600 and set(plan["providers"]) == {"codex", "claude"}
+        limits.clear_limit(conn, "claude")
+        limits.clear_limit(conn, "codex")
+
+    class Inner:
+        name = "codex"
+        calls = 0
+
+        async def run(self, prompt, *, cwd, **kw):
+            Inner.calls += 1
+            if Inner.calls == 1:
+                return AgentResult(ok=False, agent="codex", model="", error="usage limit. try again in 2 hours", error_kind="rate_limit",
+                                   retry_at=dt.datetime.now(dt.UTC) + dt.timedelta(hours=2))
+            return AgentResult(ok=True, agent="codex", model="", text="ok")
+
+    g = limits.GuardedRunner(Inner())
+    first = asyncio.run(g.run("p", cwd=Path(".")))
+    again = [asyncio.run(g.run("p", cwd=Path("."))) for _ in range(5)]
+    assert first.error_kind == "rate_limit" and all(r.error_kind == "rate_limit" and "問い合わせない" in r.error for r in again)
+    assert Inner.calls == 1                                                  # 解除待ちの間は、何回頼まれても呼び出さない
+    with psycopg.connect(db_url, autocommit=True, row_factory=dict_row) as conn:
+        limits.clear_limit(conn, "codex")                                    # 人が解除を確かめた
+    assert asyncio.run(g.run("p", cwd=Path("."))).ok and Inner.calls == 2
+    config.get_settings.cache_clear()
+
+
+# ------------------------------------------------------------------ 公開データセットのカタログと下見
+
+
+def test_dataset_catalog_only_lists_allowed_hosts_with_license():
+    from aar import datasets as ds
+    from aar.config import load_policy
+
+    catalog = ds.load_catalog()
+    hosts = load_policy().safety.dataset_hosts
+    assert catalog and all(d.get("license") and d.get("url", "").startswith("https://") and d.get("filename") for d in catalog)
+    assert all(ds.host_allowed(__import__("urllib.parse").parse.urlparse(d["url"]).hostname, hosts) for d in catalog)
+    text = ds.catalog_text(catalog, hosts)
+    assert "license: CC BY 4.0" in text and len(text.splitlines()) == 2 * len(catalog)
+    assert ds.catalog_text(catalog, ["example.org"]) == ""                  # 許していないホストのデータは見せない
+
+
+def test_dataset_preview_reads_inside_zip_without_extracting(tmp_path):
+    import io
+    import zipfile
+
+    from aar import datasets as ds
+
+    ext = tmp_path / "data" / "external"
+    ext.mkdir(parents=True)
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as z:
+        z.writestr("deep.csv", "x;y\n1;2\n")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("data.tsv", "ham\thello\nspam\twin a prize\n" * 50)
+        z.writestr("inner.zip", inner.getvalue())
+        z.writestr("blob.bin", b"\x00\x01\x02" * 100)
+    (ext / "d.zip").write_bytes(buf.getvalue())
+    out = ds.preview_files(tmp_path, [{"filename": "d.zip"}])
+    assert "data.tsv" in out and "100 行" in out and "ham\thello" in out
+    assert "deep.csv" in out and "x;y" in out and "バイナリ" in out
+    assert sorted(p.name for p in ext.iterdir()) == ["d.zip"]               # 展開したファイルを残さない
+
+
+# ---------------------------------------------------------------------- ライセンスの一次資料の記録
+
+UCI_PAGE = ('<html><body><p>DOI 10.24432/C5XW20</p><h1>License</h1><p>This dataset is licensed under a\n'
+            '<a href="https://creativecommons.org/licenses/by/4.0/legalcode" rel="nofollow">Creative Commons Attribution 4.0 '
+            'International</a>\n(CC BY 4.0) license.</p><p>This allows for the sharing and adaptation of the datasets for any '
+            'purpose,\nprovided that the appropriate credit is given.</p><script>var licensed = "under MIT";</script></body></html>')
+
+
+def _license_ws(tmp_path, declared="CC BY 4.0"):
+    from aar import datasets as ds
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    ws = _repo(tmp_path, BASE | {"requirements.txt": "numpy==2.1.3\nleftpad==0.1\n# comment\nscipy>=1.0\n"})
+    (ws / ds.EXTERNAL_DIR).mkdir(parents=True)
+    (ws / ds.MANIFEST).write_text(json.dumps({"files": [
+        {"name": "Adult", "filename": "adult.zip", "url": "https://data.example.org/adult.zip", "sha256": "0" * 64,
+         "license": declared, "source": "Example"}]}), encoding="utf-8")
+    return ws
+
+
+def _license_client(page=UCI_PAGE):
+    import httpx
+
+    def handler(req):
+        if req.url.host == "data.example.org":
+            return httpx.Response(200, text=page)
+        if "numpy" in req.url.path:
+            return httpx.Response(200, json={"info": {"license_expression": "BSD-3-Clause", "classifiers": []}})
+        return httpx.Response(404)
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+CATALOG = [{"url": "https://data.example.org/adult.zip", "license_url": "https://data.example.org/dataset/adult"}]
+
+
+def test_license_statement_is_extracted_and_matched_against_the_declaration():
+    from aar.publish import licenses as lic
+
+    st, links = lic.extract_statement(UCI_PAGE)
+    assert st.startswith("This dataset is licensed under") and "CC BY 4.0" in st and "MIT" not in st   # script の中は読まない
+    assert links == ["https://creativecommons.org/licenses/by/4.0/legalcode"]
+    assert lic.statement_matches("CC BY 4.0", st) and lic.statement_matches("cc-by 4.0", st)
+    assert not lic.statement_matches("CC0", st) and not lic.statement_matches("MIT", st)
+    assert not lic.statement_matches("", st) and not lic.statement_matches("CC BY 4.0", "")
+    assert lic.extract_statement("<p>no terms here</p>")[0] == ""
+
+
+@pytest.mark.asyncio
+async def test_license_evidence_is_recorded_and_required_check_depends_on_it(tmp_path):
+    from aar.publish import licenses as lic
+    from aar.publish import required as req
+
+    ws = _license_ws(tmp_path)
+    # 提供元の表示の記録が無いうちは、取得記録の申告だけでは確認済みにしない
+    assert req.check_license(ws)["status"] == "unverified"
+    res = await lic.record_license_evidence(ws, allowed_hosts=["data.example.org"], catalog=CATALOG, client=_license_client())
+    assert res["recorded"] and res["unconfirmed"] == ["leftpad"]           # PyPI に無い依存は未確認として残す
+    ev = lic.load_evidence(ws)
+    assert ev["data"][0]["confirmed"] and len(ev["data"][0]["page_sha256"]) == 64
+    assert [d["name"] for d in ev["dependencies"]] == ["numpy", "leftpad"]  # 版を固定した行だけ
+    md = (ws / lic.EVIDENCE_MD).read_text(encoding="utf-8")
+    assert "BSD-3-Clause" in md and "未確認" in md and "This dataset is licensed under" in md
+    item = req.check_license(ws)
+    assert item["status"] == "ok" and any("提供元の表示と一致" in e for e in item["evidence"])
+    # リポジトリの中の記録を書き換えても、裏づけにはならない（修正担当が「確認済み」と書き足す抜け道をふさぐ）
+    path = ws / lic.EVIDENCE_JSON
+    original = path.read_text(encoding="utf-8")
+    path.write_text(original.replace('"reason"', '"note"').replace('"confirmed": false', '"confirmed": true'), encoding="utf-8")
+    tampered = req.check_license(ws)
+    assert tampered["status"] == "unverified" and any("基盤が取得したとき" in e for e in tampered["evidence"])
+    path.write_text(original, encoding="utf-8")
+    assert req.check_license(ws)["status"] == "ok"
+    # 取得記録の申告が変わったら、古い記録では裏づけにならない
+    m = json.loads((ws / "data/external/MANIFEST.json").read_text(encoding="utf-8"))
+    m["files"][0]["license"] = "CC0"
+    (ws / "data/external/MANIFEST.json").write_text(json.dumps(m), encoding="utf-8")
+    assert req.check_license(ws)["status"] == "unverified"
+
+
+@pytest.mark.asyncio
+async def test_license_evidence_stays_unconfirmed_when_the_source_does_not_say_so(tmp_path):
+    from aar.publish import licenses as lic
+    from aar.publish import required as req
+
+    for i, (kw, reason) in enumerate([
+        (dict(catalog=CATALOG, client=_license_client("<p>All rights reserved.</p>")), "見つからない"),   # 文言がない
+        (dict(catalog=[], client=_license_client()), "登録されていない"),                                  # ページが未登録
+        (dict(catalog=CATALOG, client=_license_client(), allowed_hosts=["other.org"]), "許可されていない"),  # 許可外のホスト
+    ]):
+        ws = _license_ws(tmp_path / str(i))
+        hosts = kw.pop("allowed_hosts", ["data.example.org"])
+        res = await lic.record_license_evidence(ws, allowed_hosts=hosts, **kw)
+        assert "adult.zip" in res["unconfirmed"]
+        assert reason in lic.load_evidence(ws)["data"][0]["reason"]
+        assert req.check_license(ws)["status"] == "unverified"
+    # 申告と違うライセンスが表示されていれば、一致としない
+    ws = _license_ws(tmp_path / "x", declared="CC0")
+    await lic.record_license_evidence(ws, allowed_hosts=["data.example.org"], catalog=CATALOG, client=_license_client())
+    assert not lic.load_evidence(ws)["data"][0]["confirmed"]
+
+
+def test_future_publication_date_is_shown_as_a_registered_date_not_a_fact():
+    import datetime as dt
+
+    from aar.discovery import published_text
+
+    today = dt.date(2026, 11, 24)
+    assert published_text("2026-08-12", today) == "2026-08-12"
+    assert published_text(dt.date(2026, 11, 24), today) == "2026-11-24"
+    assert "刊行予定日" in published_text("2026-12-08", today) and published_text("2026-12-08", today).startswith("2026-12-08")
+    assert published_text(None, today) == "不明" and published_text("not a date", today) == "not a date"
+
+
+def test_host_sleep_seconds_are_counted_from_the_power_log():
+    import datetime as dt
+
+    from aar.limits import parse_sleep_seconds
+
+    log = """2026-11-24 12:00:00 +0900 Sleep               \tEntering Sleep state due to 'Maintenance Sleep'
+2026-11-24 12:16:00 +0900 DarkWake            \tDarkWake from Deep Idle
+2026-11-24 12:16:10 +0900 Sleep               \tEntering Sleep state
+2026-11-24 12:16:11 +0900 Wake Requests       \t[process=dasd request=SleepService deltaSecs=900]
+2026-11-24 12:16:20 +0900 Assertions          \tPID 1 Released
+2026-11-24 12:46:10 +0900 Wake                \tWake from Deep Idle
+2026-11-24 13:30:00 +0900 Sleep               \tEntering Sleep state
+"""
+    jst = dt.timezone(dt.timedelta(hours=9))
+    at = lambda h, m: dt.datetime(2026, 11, 24, h, m, tzinfo=jst)  # noqa: E731
+    assert parse_sleep_seconds(log, at(11, 0), at(13, 0)) == 16 * 60 + 30 * 60
+    assert parse_sleep_seconds(log, at(12, 10), at(12, 30)) == 6 * 60 + 13 * 60 + 50   # 期間の端で切る
+    assert parse_sleep_seconds(log, at(13, 0), at(14, 0)) == 30 * 60                   # まだ復帰していないスリープ
+    assert parse_sleep_seconds(log, at(10, 0), at(11, 0)) == 0 and parse_sleep_seconds("", at(10, 0), at(11, 0)) == 0
+
 
 def test_preregistration_change_counts_as_a_change_to_the_research():
     assert touches_research(["prereg/cycle1.json"]) and not touches_code_or_data(["prereg/cycle1.json"])

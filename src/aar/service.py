@@ -198,6 +198,46 @@ async def change_budget(project_id: str, budget_usd: float) -> None:
     await client.get_workflow_handle(_workflow_id(project_id)).execute_update("change_budget", budget_usd)
 
 
+async def reconcile_projects() -> list[dict[str, str]]:
+    """DB では進行中なのに、ワークフローが終わっている研究を見つけて、失敗として確定する。
+
+    ワークフローが全体の制限時間で打ち切られたり、外から終了させられたりすると、結果を確定する工程が動かず、
+    DB の状態が「実行中」「保留」のまま残る。長く動かすと必ず起きるので、ワーカーの起動時と定期的に確かめる。
+    実行中のワークフローと、正常に完了したワークフローには触れない。
+    """
+    from temporalio.service import RPCError, RPCStatusCode
+
+    with connect() as conn:
+        rows = fetch_all(conn, "SELECT id, workflow_id, status, phase, title FROM research_projects "
+                               "WHERE status IN ('running', 'paused', 'on_hold')")
+    if not rows:
+        return []
+    client = await get_client()
+    fixed = []
+    for r in rows:
+        try:
+            desc = await client.get_workflow_handle(r["workflow_id"]).describe()
+            state = desc.status.name if desc.status else "UNKNOWN"
+        except RPCError as e:
+            if e.status != RPCStatusCode.NOT_FOUND:
+                continue
+            state = "NOT_FOUND"
+        if state in ("RUNNING", "COMPLETED", "CONTINUED_AS_NEW", "UNKNOWN"):
+            continue
+        reason = (f"[workflow_ended] ワークフローが {state} で終わっていた（工程 {r['phase']} の途中）。結果は確定していない。"
+                  "本実験まで終わっていれば `aar projects reopen` で監査からやり直せる")
+        with connect() as conn:
+            done = conn.execute("UPDATE research_projects SET status = 'failed', outcome = 'failed', outcome_reason = %s, finished_at = now() "
+                                "WHERE id = %s AND status IN ('running', 'paused', 'on_hold') AND workflow_id = %s",
+                                (reason, r["id"], r["workflow_id"])).rowcount
+            if done:
+                store.log_event(conn, r["id"], r["workflow_id"], "reconciled", {"workflow_state": state, "was": r["status"], "phase": r["phase"]})
+                store.notify(conn, r["id"], "error", f"研究が途中で終わっていた: {r['title'][:50]}", reason,
+                             f"{r['id']}:reconciled:{r['workflow_id']}", macos=bool(load_policy().notify.get("macos", True)))
+                fixed.append({"project_id": r["id"], "workflow_state": state})
+    return fixed
+
+
 async def ensure_schedules() -> list[str]:
     """日次の論文収集と週次の企画生成を登録する。登録済みなら何もしない。
 
@@ -225,12 +265,13 @@ async def ensure_schedules() -> list[str]:
     return created
 
 
-async def run_now(kind: str, arg: str = "") -> dict[str, Any]:
+async def run_now(kind: str, arg: str = "", *, prefer_public_data: bool = False, paper_ids: list[str] | None = None) -> dict[str, Any]:
     """収集または企画生成を今すぐ1回実行して結果を待つ。"""
     client = await get_client()
     wf = {"ingest": "IngestWorkflow", "proposals": "ProposalWorkflow"}[kind]
     stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S")
-    return await client.execute_workflow(wf, arg, id=f"aar-{kind}-manual-{stamp}", task_queue=get_settings().task_queue,
+    args: list[Any] = [arg, prefer_public_data, paper_ids] if kind == "proposals" and (prefer_public_data or paper_ids) else [arg]
+    return await client.execute_workflow(wf, args=args, id=f"aar-{kind}-manual-{stamp}", task_queue=get_settings().task_queue,
                                          execution_timeout=timedelta(hours=3))
 
 
