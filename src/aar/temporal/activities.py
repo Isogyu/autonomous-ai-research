@@ -583,7 +583,7 @@ async def build_deliverables(project_id: str, round_no: int, feedback_from_audit
         await _record_licenses(ctx, project, policy)
         if round_no == 1 or not (ctx.ws / "report" / "report.md").exists():
             await deliv.write_narrative(ctx, prop, facts, round_no=round_no)
-        deliv.copy_audit(ctx.ws, sorted(audit_root_of(project_id).glob("research-round*/audit")))
+        deliv.copy_audit(ctx.ws, sorted(audit_root_of(project_id).glob("research-round*/audit")), _third_party_texts(project_id))
         asm = deliv.assemble(ctx.ws, project["title"])
         commit = wsmod.commit_all(ctx.ws, f"発信用の成果物（{round_no}回目）")
         with connect() as conn:
@@ -754,7 +754,7 @@ async def refresh_deliverables(project_id: str, round_no: int) -> dict[str, Any]
             verdicts = _verdicts(conn, project_id)
         deliv.write_static(ctx, verdicts, license_spdx="MIT", holder=name)
         await _record_licenses(ctx, project, policy)
-        deliv.copy_audit(ctx.ws, sorted(audit_root_of(project_id).glob("research-round*/audit")))
+        deliv.copy_audit(ctx.ws, sorted(audit_root_of(project_id).glob("research-round*/audit")), _third_party_texts(project_id))
         asm = deliv.assemble(ctx.ws, project["title"])
         return {"commit": wsmod.commit_all(ctx.ws, f"成果物の更新（{round_no}回目）"), **asm}
     return await _phase(project_id, "deliverables", f"refresh:{round_no}", run)
@@ -805,7 +805,7 @@ async def submit_candidate(project_id: str, round_no: int = 0) -> dict[str, Any]
     """
     async def run() -> dict[str, Any]:
         ctx, project, policy = make_ctx(project_id)
-        deliv.copy_audit(ctx.ws, sorted(audit_root_of(project_id).glob("*-round*/audit")))
+        deliv.copy_audit(ctx.ws, sorted(audit_root_of(project_id).glob("*-round*/audit")), _third_party_texts(project_id))
         final_commit = wsmod.commit_all(ctx.ws, "独立監査と公開品質監査の報告を追加")
         # 監査に合格したのは、監査の報告を足す前のコミット。提出するのは足したあとのコミットなので、
         # 最終の内容そのものを検査して、結果を提出に結び付ける

@@ -593,8 +593,8 @@ async def test_content_added_after_the_audit_is_checked_before_submission(stack,
     # 監査の報告を写す処理が、原論文の要旨を持ち込む場合（監査は合格済み）
     original = deliv.copy_audit
 
-    def leaky(ws, dirs):
-        original(ws, dirs)
+    def leaky(ws, dirs, *rest):
+        original(ws, dirs, *rest)
         if any("publication-round" in str(d) for d in dirs):   # 提出の直前（監査のあと）にだけ持ち込む
             (ws / "audit" / "abstract.md").write_text(mock_papers()[0].abstract + "\n", encoding="utf-8")
     monkeypatch.setattr(deliv, "copy_audit", leaky)
@@ -641,8 +641,8 @@ async def test_content_changed_after_the_audit_blocks_submission(stack, monkeypa
 
     original = deliv.copy_audit
 
-    def leaky(ws, dirs):
-        original(ws, dirs)
+    def leaky(ws, dirs, *rest):
+        original(ws, dirs, *rest)
         if any("publication-round" in str(d) for d in dirs):   # 提出の直前（監査のあと）にだけ、監査していない変更が入る
             (ws / "README.md").write_text((ws / "README.md").read_text(encoding="utf-8") + "\n監査のあとに足した主張。\n", encoding="utf-8")
     monkeypatch.setattr(deliv, "copy_audit", leaky)

@@ -233,8 +233,15 @@ figure{{margin:1.2em 0;overflow-x:auto}}figure svg{{max-width:100%;height:auto}}
     return {"figures": [f.name for f in figs]}
 
 
-def copy_audit(ws: Path, audit_dirs: list[Path]) -> None:
-    """独立監査の報告を研究リポジトリの audit/ に写す（公開候補に監査結果を添えるため）。"""
+def copy_audit(ws: Path, audit_dirs: list[Path], third_party_texts: list[tuple[str, str]] | None = None) -> list[str]:
+    """独立監査の報告を研究リポジトリの audit/ に写す（公開候補に監査結果を添えるため）。
+
+    third_party_texts（原論文の要旨・本文）を渡すと、それがまとまった長さで写っている行を、写した側でだけ取り除く
+    （監査の実行ログには、実行担当が表示したファイルの中身が残る）。取り除いた箇所の一覧を返す。監査の原本は変えない。
+    """
+    from aar.publish import required as req
+
+    redacted: list[str] = []
     for d in audit_dirs:
         if not d.exists():
             continue
@@ -258,18 +265,22 @@ def copy_audit(ws: Path, audit_dirs: list[Path]) -> None:
                  (str(Path.home()), "~")]
         swaps += [(str(Path(a).resolve()), b) for a, b in swaps if str(Path(a).resolve()) != a]
         for p in dest.rglob("*"):
-            if not p.is_file() or p.stat().st_size > 5_000_000:
+            if not p.is_file() or p.stat().st_size > req._MAX_FILE_BYTES:
                 continue
             try:
                 text = p.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 continue
             new = text
+            if third_party_texts:
+                new, reasons = req.redact_third_party_text(new, third_party_texts)
+                redacted += [f"{p.relative_to(ws)}: {r}" for r in reasons]
             for a, b in swaps:
                 new = new.replace(a, b)
             new = re.sub(r"/Users/[A-Za-z0-9_.\-]+/", "~/", new)
             if new != text:
                 p.write_text(new, encoding="utf-8")
+    return redacted
 
 
 # ------------------------------------------------------------------ 機械的な確認

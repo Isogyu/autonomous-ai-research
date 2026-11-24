@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -149,6 +150,42 @@ def check_third_party_text(ws: Path, sources: list[tuple[str, str]]) -> dict[str
                 hits.append(f"{path}（{where}）: {s.label}と連続 {run} 文字が一致")
     hits.sort(key=lambda h: "過去のコミットだけ" in h)
     return _item("third_party_text", "violation" if hits else "ok", hits or [f"一致なし（調べたファイル {len(contents)} 件）"], method)
+
+
+REDACTED_NOTE = "第三者の文章（{labels}）を含むため、公開候補には写していない。監査の原本には残っている"
+
+
+def redact_third_party_text(text: str, sources: list[tuple[str, str]]) -> tuple[str, list[str]]:
+    """文章から、第三者の文章がまとまった長さで写っている行を取り除く。（取り除いたあとの文章、理由の一覧）を返す。
+
+    監査の実行ログのように、公開候補へ写す記録に原論文の要旨や本文が入り込む場合に使う（実行担当が、それらを含むファイルを
+    表示した結果がログに残る）。基準は check_third_party_text と同じ。行を取り除いても一致が残る（行をまたぐ）ときは、全文を注記に置き換える。
+    一致がなければ、文章はそのまま返す。
+    """
+    srcs = [_Source(label, t) for label, t in sources if t and len(_norm(t)) >= SOURCE_MIN_CHARS]
+    if not srcs or len(text.encode("utf-8", errors="ignore")) > _MAX_FILE_BYTES:
+        return text, []
+
+    def hit(part: str) -> list[str]:
+        norm = _norm(part)
+        return [s.label for s in srcs if s.longest_run(norm) >= s.threshold]
+
+    if not hit(text):
+        return text, []
+    reasons: list[str] = []
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        labels = hit(line) if len(line) >= 120 else []
+        if labels:
+            note = REDACTED_NOTE.format(labels="、".join(labels))
+            lines[i] = json.dumps({"type": "redacted", "reason": note}, ensure_ascii=False) if line.lstrip().startswith("{") else f"（{note}）"
+            reasons.append(f"{i + 1} 行目: {'、'.join(labels)}")
+    out = "\n".join(lines)
+    left = hit(out)
+    if left:                                  # 行をまたいで写っている
+        note = REDACTED_NOTE.format(labels="、".join(left))
+        return f"（{note}）\n", [f"全文: {'、'.join(left)}"]
+    return out, reasons
 
 
 def check_secrets(ws: Path) -> dict[str, Any]:
