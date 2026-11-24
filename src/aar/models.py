@@ -156,6 +156,7 @@ class AuditReport(BaseModel):
     report_dir: str = ""
     execution_mode: Literal["real", "mock"] = "real"
     cost_usd: float = 0.0
+    detail: dict[str, Any] = Field(default_factory=dict)   # 内訳の点数、保留点、判定の根拠、結果の検証、実行ログの場所など
 
 
 class GateCheck(BaseModel):

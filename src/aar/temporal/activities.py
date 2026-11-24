@@ -23,7 +23,7 @@ from temporalio.exceptions import ApplicationError
 
 from aar import discovery, gates, store
 from aar import workspace as wsmod
-from aar.agents.runner import AgentRunner, ClaudeCodeRunner, CodexRunner
+from aar.agents.runner import AgentRunner, ClaudeCodeRunner, CodexRunner, wrap_untrusted
 from aar.audit import publication as pubaudit
 from aar.audit import research as raudit
 from aar.config import Policy, get_settings, load_policy, policy_file_sha256
@@ -73,7 +73,7 @@ def _policy_for(project: dict[str, Any]) -> Policy:
     policy = load_policy()
     if policy.sha256 != project["policy_sha256"]:
         raise hold("policy_changed", "品質ゲートを含む方針ファイル（config/policy.yaml）が研究の開始後に変更された。"
-                                     "意図した変更なら研究の中止と再登録、意図しない変更なら元に戻して再開する")
+                                     "意図しない変更なら元に戻して再開する。意図した変更なら `aar projects adopt-policy` で現在の方針に固定し直してから再開する")
     return policy
 
 
@@ -169,8 +169,25 @@ async def prepare_project(project_id: str) -> dict[str, Any]:
                                            paper_id=str(prop["paper_id"]) if prop.get("paper_id") else None)
             store.set_project(conn, project_id, workspace_path=str(ctx.ws), branch=branch, memory_context=mem,
                               started_at=dt.datetime.now(dt.UTC))
-        return {"branch": branch, "memory_used": bool(mem)}
+        fulltext = await _paper_fulltext(prop, project["execution_mode"])
+        return {"branch": branch, "memory_used": bool(mem), "fulltext_chars": len(fulltext or "")}
     return await _phase(project_id, "prepare", "prepare", run)
+
+
+async def _paper_fulltext(prop: dict[str, Any], mode: str) -> str | None:
+    """企画の原論文の本文（取得済みならそれ、無ければ取得する）。モック実行では取得しない。"""
+    if mode == "mock" or not prop.get("paper_id"):
+        return None
+    from aar.sources.fulltext import ensure_fulltext
+
+    settings = get_settings()
+    with connect() as conn:
+        paper = fetch_one(conn, "SELECT * FROM papers WHERE id = %s", (prop["paper_id"],))
+        try:
+            return await ensure_fulltext(conn, settings.data_dir, paper, settings.contact_email) if paper else None
+        except Exception:  # noqa: BLE001 - 本文が取れなくても研究は要旨で進める
+            conn.rollback()
+            return None
 
 
 @activity.defn
@@ -179,7 +196,8 @@ async def understand_paper(project_id: str) -> dict[str, Any]:
         ctx, project, _ = make_ctx(project_id)
         with connect() as conn:
             prop = store.get_proposal_for_project(conn, project_id)
-        return await native.understand(ctx, prop, project.get("memory_context") or "")
+        fulltext = await _paper_fulltext(prop, project["execution_mode"])
+        return await native.understand(ctx, prop, project.get("memory_context") or "", fulltext)
     return await _phase(project_id, "understand", "understand", run)
 
 
@@ -187,11 +205,34 @@ async def understand_paper(project_id: str) -> dict[str, Any]:
 async def design_and_preregister(project_id: str, cycle: int, previous: dict[str, Any] | None) -> dict[str, Any]:
     """研究設計を作り、事前登録として固定する（ハッシュと Git コミット）。"""
     async def run() -> dict[str, Any]:
-        ctx, project, _ = make_ctx(project_id)
+        ctx, project, policy = make_ctx(project_id)
         with connect() as conn:
             prop = store.get_proposal_for_project(conn, project_id)
             understanding = run_once(conn, f"{project_id}:understand", "phase") or {}
-        design = await native.design(ctx, prop, understanding, cycle, previous, project.get("memory_context") or "")
+        from aar import datasets as ds
+
+        design, feedback, fetched = {}, "", {"files": [], "failed": []}
+        if (ctx.ws / wsmod.prereg_path(cycle)).exists():
+            design = json.loads((ctx.ws / wsmod.prereg_path(cycle)).read_text(encoding="utf-8"))   # 登録済み（やり直し時）
+        else:
+            for attempt in range(3):
+                design = await native.design(ctx, prop, understanding, cycle, previous, project.get("memory_context") or "", feedback)
+                # 外部データは事前登録の前に取得し、ハッシュを登録内容に含める（後からの差し替えを検出できる）
+                fetched = await ds.fetch_datasets(ctx.ws, design.get("datasets") or [], allowed_hosts=policy.safety.dataset_hosts,
+                                                  max_mb=policy.safety.dataset_max_mb)
+                if not fetched["failed"]:
+                    break
+                with connect() as conn:
+                    store.log_event(conn, project_id, project_id, "dataset_fetch_failed", {"cycle": cycle, "attempt": attempt + 1,
+                                                                                         "failed": fetched["failed"]})
+                feedback = ("\n\n## 前の設計で取得できなかったデータ（URL を直すか、そのデータを使わない設計にする）\n"
+                            + wrap_untrusted("dataset_failures", json.dumps(fetched["failed"], ensure_ascii=False, indent=2)))
+            else:
+                raise ApplicationError("設計が、取得できない外部データに依存している: "
+                                       + json.dumps(fetched["failed"], ensure_ascii=False)[:500], type="DatasetUnavailable", non_retryable=True)
+            design["dataset_manifest"] = [{k: f[k] for k in ("filename", "url", "sha256", "bytes", "license")} for f in fetched["files"]]
+            if fetched["files"]:
+                wsmod.commit_all(ctx.ws, f"外部データの取得記録（サイクル{cycle}）")
         sha, commit = wsmod.register_prereg(ctx.ws, cycle, design)
         # 既に登録済みだった場合は、登録済みの内容を正とする
         design = json.loads((ctx.ws / wsmod.prereg_path(cycle)).read_text(encoding="utf-8"))
@@ -199,7 +240,8 @@ async def design_and_preregister(project_id: str, cycle: int, previous: dict[str
             store.save_prereg(conn, project_id, cycle, design, sha, commit)
             store.log_event(conn, project_id, project_id, "preregistered", {"cycle": cycle, "sha256": sha, "commit": commit},
                             key=f"{project_id}:prereg:{cycle}")
-        return {"sha256": sha, "commit": commit, "hypotheses": [h["label"] for h in design["hypotheses"]]}
+        return {"sha256": sha, "commit": commit, "hypotheses": [h["label"] for h in design["hypotheses"]],
+                "external_data": [f["filename"] for f in design.get("dataset_manifest") or []]}
     return await _phase(project_id, "design", f"design:{cycle}", run)
 
 
@@ -317,10 +359,25 @@ def _verify_all_preregs(conn: Any, ws: Path, project_id: str) -> tuple[bool, str
         return False, "事前登録の記録がない"
     details = []
     ok_all = True
+    from aar import datasets as ds
+
+    registered: dict[str, str] = {}
     for r in rows:
         ok, d = wsmod.verify_prereg(ws, r["cycle"], r["content_sha256"], r["git_commit"])
         ok_all &= ok
         details.append(f"サイクル{r['cycle']}: {d}")
+        registered |= {f["filename"]: f["sha256"] for f in (r["content"].get("dataset_manifest") or [])}
+    # 外部データが、事前登録に記録したハッシュのままであること
+    data_problems = ds.verify_manifest(ws)
+    for name, sha in registered.items():
+        p = ws / ds.EXTERNAL_DIR / name
+        if not p.exists() or wsmod.file_sha256(p) != sha:
+            data_problems.append(f"{name} が事前登録に記録した内容と違う")
+    if data_problems:
+        ok_all = False
+        details.append("外部データ: " + "、".join(sorted(set(data_problems))))
+    elif registered:
+        details.append(f"外部データ {len(registered)} 件は登録時のハッシュと一致")
     return ok_all, " / ".join(details)
 
 
@@ -351,7 +408,7 @@ async def research_audit(project_id: str, round_no: int) -> dict[str, Any]:
                 ctx.runners[choice.agent], model=choice.model, skill_dir=settings.research_audit_skill_dir, ws=ctx.ws,
                 audit_root=audit_root_of(project_id), round_no=round_no, title=project["title"], paper=_paper_text(prop),
                 prior_issues=[p for p in prior if p["severity"] in ("Critical", "Major")], heartbeat=_beat,
-                paper_record=paper_record)
+                paper_record=paper_record, fulltext=await _paper_fulltext(prop, project["execution_mode"]))
         except FileNotFoundError as e:
             raise hold("setup", str(e)) from e
         ctx.on_cost("研究独立監査", f"{project_id}:audit:research:{round_no}", res)
@@ -422,6 +479,9 @@ def _verdicts(conn: Any, project_id: str) -> dict[str, str]:
 
 
 def _facts(conn: Any, project_id: str, project: dict[str, Any]) -> dict[str, Any]:
+    understanding = run_once(conn, f"{project_id}:understand", "phase") or {}
+    reopened = fetch_one(conn, "SELECT 1 FROM human_interventions WHERE project_id = %s AND kind = 'reopen'", (project_id,))
+    project = project | {"_basis": understanding.get("basis"), "_reopened": bool(reopened)}
     exps = fetch_all(conn, "SELECT cycle, kind, name, status, duration_s FROM experiments WHERE project_id = %s "
                            "ORDER BY started_at", (project_id,))
     audit = fetch_one(conn, "SELECT round, auditor, research_verdict, publication_verdict, summary FROM audit_runs "
@@ -438,6 +498,16 @@ def _facts(conn: Any, project_id: str, project: dict[str, Any]) -> dict[str, Any
         "独立監査": ({"回数": audit["round"], "監査担当": audit["auditor"], "研究妥当性": audit["research_verdict"],
                       "発信可否": audit["publication_verdict"], "要約": audit["summary"][:1500]} if audit else None),
         "実験環境": "ネットワークなしの隔離環境、CPU のみ",
+        "原論文の読み方": "本文（機械的に文章にしたもの）" if project.get("_basis") == "fulltext" else "要旨のみ",
+        "作られ方": {
+            "概要": "自律研究パイプライン（autonomous-ai-research）が、人が選んだ検証企画をもとに自動で実行した",
+            "AI が行った工程": "原論文の整理、研究設計、実験・分析コードとテストの作成、結果の検討、文章の作成、監査の指摘への修正",
+            "実装と文章を担当したエージェント": "Claude Code",
+            "独立監査と公開品質監査を担当したエージェント": "Codex（実装担当とは別。生データからの再計算を含む）",
+            "機械的に行われた工程": "事前登録の固定、隔離環境での実験の実行、結果の表と図の生成、品質ゲートの判定",
+            "人が行ったこと": "検証企画の選択" + ("、監査のやり直しの指示" if project.get("_reopened") else ""),
+            "人が確認していないこと": "実験コード、分析結果、文章の内容（人による査読は受けていない）",
+        },
     }
 
 
@@ -485,14 +555,34 @@ async def publication_audit(project_id: str, round_no: int) -> dict[str, Any]:
             prop = store.get_proposal_for_project(conn, project_id)
         mech = deliv.mechanical_publication_checks(ctx.ws, [prop.get("paper_abstract"), prop.get("body")])
         tests = await native.run_tests(ctx)
-        mech_view = {k: v for k, v in mech.items() if k != "secrets"} | {"secrets": [h["path"] + " / " + h["kind"] for h in mech["secrets"]]}
-        report, res, commit = await pubaudit.run_publication_audit(
-            ctx.runners[choice.agent], model=choice.model, skill_dir=settings.publication_audit_skill_dir, ws=ctx.ws,
-            audit_root=audit_root_of(project_id), round_no=round_no, mech=mech_view | {"tests_passed": tests.ok},
-            prior_issues=[p for p in prior if p["severity"] in ("Critical", "Major")], heartbeat=_beat)
+        mech_view = {k: v for k, v in mech.items() if k != "secrets"} | {
+            "secrets": [h["path"] + " / " + h["kind"] for h in mech["secrets"]],
+            "tests": {"passed": tests.ok, "sandbox": tests.sandbox, "log_tail": tests.tail(1500),
+                      "note": "オーケストレーターが隔離環境で実行した結果（既存のログ）"}}
+        pg = policy.gates.publication
+        skill_dir = settings.publication_audit_skill_dir
+        has_skill = raudit.skill_available(skill_dir)
+        if pg.require_formal_skill and not has_skill:
+            raise hold("setup", f"GitHub 公開品質監査 Skill が {skill_dir} にない。Skill を置いてから再開する"
+                                "（代用の監査では公開品質ゲートを通さない設定になっている）")
+        common = dict(model=choice.model, ws=ctx.ws, audit_root=audit_root_of(project_id), round_no=round_no, mech=mech_view,
+                      prior_issues=[p for p in prior if p["severity"] in ("Critical", "Major")], heartbeat=_beat)
+        if has_skill:
+            report, res, commit = await pubaudit.run_skill_audit(ctx.runners[choice.agent], skill_dir=skill_dir, **common)
+        else:
+            report, res, commit = await pubaudit.run_builtin_audit(ctx.runners[choice.agent], **common)
         ctx.on_cost("公開品質監査", f"{project_id}:audit:publication:{round_no}", res)
         if not res.ok and res.error_kind in ("auth", "rate_limit"):
             raise hold(res.error_kind, f"監査担当を実行できない: {res.error}")
+        if report.status == "failed":
+            # Skill を実行できなかった、または結果が Skill の決まりに合っていない。合格にも不合格にもせず、やり直す。
+            # やり直しても正常な結果が得られなければ、研究は「失敗」として確定する（公開可にはならない）
+            with connect() as conn:
+                store.log_event(conn, project_id, project_id, "publication_audit_invalid",
+                                {"round": round_no, "attempt": _attempt(), "skill": report.skill,
+                                 "problems": report.detail.get("problems", []), "record": report.report_dir})
+            raise ApplicationError("公開品質監査が正常な結果を返さなかった: "
+                                   + "; ".join(map(str, report.detail.get("problems", [])))[:600], type="InvalidAuditResult")
         # 機械的な確認で見つかった問題は、監査担当の採点にかかわらず指摘として残す
         from aar.models import AuditFinding
         if mech["secrets"]:
@@ -504,6 +594,10 @@ async def publication_audit(project_id: str, round_no: int) -> dict[str, Any]:
                                                 title="分析結果に由来が見つからない数値が文章にある",
                                                 detail={"evidence": "; ".join(mech["unknown_numbers"][:30]),
                                                         "proposed_fix": "表（report/results.md）の値をそのまま写すか、その数値を削る"}))
+        if mech["external_data_problems"]:
+            report.findings.append(AuditFinding(issue_id=f"X{round_no}01", severity="Major", category="data",
+                                                title="外部データの記録に不備がある",
+                                                detail={"evidence": "、".join(mech["external_data_problems"])}))
         if mech["missing_sections"]:
             report.findings.append(AuditFinding(issue_id=f"D{round_no}01", severity="Major", category="documentation",
                                                 title="報告書に決まった節がない", detail={"evidence": "、".join(mech["missing_sections"])}))
@@ -521,7 +615,8 @@ async def publication_audit(project_id: str, round_no: int) -> dict[str, Any]:
         return {"passed": gate.passed, "score": report.score, "status": report.status, "skill": report.skill,
                 "blocking": [c.model_dump() for c in gate.blocking()], "checks": [c.model_dump() for c in gate.checks],
                 "n_critical": sum(f.severity == "Critical" for f in report.findings),
-                "n_major": sum(f.severity == "Major" for f in report.findings), "summary": report.summary[:2000]}
+                "n_major": sum(f.severity == "Major" for f in report.findings), "summary": report.summary[:2000],
+                "verdict": report.publication_verdict, "target_commit": commit}
     return await _phase(project_id, "publication_audit", f"audit:publication:{round_no}", run)
 
 
@@ -793,8 +888,11 @@ async def generate_proposal(batch_key: str, paper_id: str) -> dict[str, Any]:
         record = discovery.track_record(conn)
     choice = policy.research.model_for("planner")
     runners = runners_for(settings.mode)
+    fulltext = await _paper_fulltext({"paper_id": paper_id}, settings.mode)
+    packages = ["numpy", "scipy", "pandas"] if policy.safety.sandbox == "docker" else ["numpy"]
     res = await runners[choice.agent].run(
-        discovery.proposal_prompt(paper, score or {}, mem, record, policy.research.budget_usd, ["numpy"]),  # type: ignore[arg-type]
+        discovery.proposal_prompt(paper, score or {}, mem, record, policy.research.budget_usd, packages,  # type: ignore[arg-type]
+                                  fulltext, policy.safety.dataset_hosts),
         cwd=settings.data_dir, model=choice.model, schema=discovery.PROPOSAL_SCHEMA, tools=[], max_budget_usd=1.0,
         timeout_s=600, heartbeat=_beat)
     with connect() as conn:
@@ -806,7 +904,7 @@ async def generate_proposal(batch_key: str, paper_id: str) -> dict[str, Any]:
         s = res.structured or {}
         if not s.get("feasible"):
             return {"created": False, "reason": f"実行できない: {s.get('infeasible_reason', '')}"[:300]}
-        prop = discovery.to_proposal(s, paper)  # type: ignore[arg-type]
+        prop = discovery.to_proposal(s, paper, "fulltext" if fulltext else "abstract_only")  # type: ignore[arg-type]
         pid = discovery.save_proposal(conn, batch_key, paper_id, prop, float(score["total"]) if score else 0.0,
                                       f"{choice.agent}:{choice.model or 'default'}",
                                       "mock" if settings.mode == "mock" else "real")

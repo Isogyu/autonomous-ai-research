@@ -233,11 +233,11 @@ def save_audit(conn: psycopg.Connection, project_id: str, round_no: int, report:
         conn,
         """INSERT INTO audit_runs (project_id, kind, round, auditor, implementer, skill, target_commit, status,
                research_verdict, publication_verdict, score, report_uri, summary, execution_mode, idempotency_key,
-               finished_at)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now()) RETURNING id""",
+               finished_at, detail)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s) RETURNING id""",
         (project_id, report.kind, round_no, report.auditor, implementer, report.skill, target_commit, report.status,
          report.research_verdict, report.publication_verdict, report.score, report.report_dir, report.summary,
-         report.execution_mode, key),
+         report.execution_mode, key, Jsonb(report.detail)),
     )
     audit_id = str(row["id"])  # type: ignore[index]
     for c in report.claims:

@@ -56,6 +56,7 @@ class AgentRunner(Protocol):
         timeout_s: int = 1800,
         writable: bool = False,
         heartbeat: Callable[[], None] | None = None,
+        log_path: Path | None = None,
     ) -> AgentResult: ...
 
 
@@ -130,7 +131,7 @@ class ClaudeCodeRunner:
         self.binary = binary
 
     async def run(self, prompt, *, cwd, model="", schema=None, tools=None, max_budget_usd=1.0,
-                  timeout_s=1800, writable=False, heartbeat=None) -> AgentResult:
+                  timeout_s=1800, writable=False, heartbeat=None, log_path=None) -> AgentResult:
         tools = tools if tools is not None else (EDIT_TOOLS if writable else READ_ONLY_TOOLS)
         cmd = [
             self.binary, "-p", "--output-format", "json",
@@ -150,6 +151,7 @@ class ClaudeCodeRunner:
         code, out, err, timed_out = await _exec(cmd, cwd=cwd, stdin=prompt, timeout_s=timeout_s,
                                                 env=_child_env(), heartbeat=heartbeat)
         dur = time.monotonic() - started
+        _save_log(log_path, out, err)
         if timed_out:
             return AgentResult(ok=False, agent=self.name, model=model, duration_s=dur,
                                error="時間切れ", error_kind="timeout")
@@ -189,7 +191,7 @@ class CodexRunner:
         self.binary = binary
 
     async def run(self, prompt, *, cwd, model="", schema=None, tools=None, max_budget_usd=1.0,
-                  timeout_s=1800, writable=False, heartbeat=None) -> AgentResult:
+                  timeout_s=1800, writable=False, heartbeat=None, log_path=None) -> AgentResult:
         with tempfile.TemporaryDirectory(prefix="aar-codex-") as td:
             last = Path(td) / "last.txt"
             cmd = [
@@ -209,6 +211,7 @@ class CodexRunner:
                 cmd, cwd=cwd, stdin=GUARD_PROMPT + "\n\n" + prompt, timeout_s=timeout_s,
                 env=_child_env(), heartbeat=heartbeat)
             dur = time.monotonic() - started
+            _save_log(log_path, out, err)
             if timed_out:
                 return AgentResult(ok=False, agent=self.name, model=model, duration_s=dur,
                                    error="時間切れ", error_kind="timeout")
@@ -239,6 +242,17 @@ class CodexRunner:
             res.error = detail or f"終了コード {code}"
             res.error_kind = _classify_error(detail)  # type: ignore[assignment]
         return res
+
+
+def _save_log(log_path: Path | None, out: str, err: str) -> None:
+    """エージェントの実行ログ（道具の呼び出しを含むイベント列）を保存する。監査の証跡に使う。"""
+    if log_path is None:
+        return
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(out + ("\n--- stderr ---\n" + err if err.strip() else ""), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -280,7 +294,7 @@ class MockRunner:
         self.calls: list[str] = []
 
     async def run(self, prompt, *, cwd, model="", schema=None, tools=None, max_budget_usd=1.0,
-                  timeout_s=1800, writable=False, heartbeat=None) -> AgentResult:
+                  timeout_s=1800, writable=False, heartbeat=None, log_path=None) -> AgentResult:
         self.calls.append(prompt)
         delay = float(os.environ.get("AAR_MOCK_DELAY_S", "0"))   # 中断・再開の検証用に、呼び出しを遅くできる
         waited = 0.0

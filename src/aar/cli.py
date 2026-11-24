@@ -206,10 +206,21 @@ def projects_cancel(project_id: str) -> None:
 
 
 @projects_app.command("reopen")
-def projects_reopen(project_id: str) -> None:
-    """公開不可で終わった研究を、独立監査からやり直す（基準は変わらない）。"""
+def projects_reopen(
+    project_id: str,
+    from_: Annotated[str, typer.Option("--from", help="audit: 独立監査から / publication: 公開品質監査から")] = "audit",
+    adopt_current_policy: Annotated[bool, typer.Option(help="方針ファイルが変わっている場合に、現在の方針に固定し直す（記録に残る）")] = False,
+) -> None:
+    """終わった研究を監査からやり直す。これまでの記録と成果物は残る。"""
     from aar import service
-    _print(asyncio.run(service.reopen_project(project_id)))
+    _print(asyncio.run(service.reopen_project(project_id, from_=from_, adopt_current_policy=adopt_current_policy)))
+
+
+@projects_app.command("adopt-policy")
+def projects_adopt_policy(project_id: str) -> None:
+    """方針の変更で保留になった研究を、現在の方針に固定し直す（記録に残る）。そのあと resume で再開する。"""
+    from aar import service
+    _print(service.adopt_policy(project_id))
 
 
 @projects_app.command("budget")

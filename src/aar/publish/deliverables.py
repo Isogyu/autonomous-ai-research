@@ -75,6 +75,51 @@ def results_block(results: list[dict[str, Any]], verdicts: dict[str, str]) -> st
     return "\n".join(lines)
 
 
+def write_render_tool(ws: Path) -> None:
+    """報告書の表と図を分析結果から作り直すスクリプトを tools/ に置く（このモジュールと同じ処理の写し）。"""
+    import inspect
+
+    from aar.publish import charts
+
+    tools = ws / "tools"
+    tools.mkdir(exist_ok=True)
+    (tools / "report_charts.py").write_text(
+        "# このファイルは自動生成（自律研究パイプラインの表・図の生成処理の写し）。標準ライブラリだけで動く。\n"
+        + inspect.getsource(charts), encoding="utf-8")
+    block_src = inspect.getsource(results_block).replace("results_table(", "report_charts.results_table(")
+    (tools / "render_report_assets.py").write_text(f'''"""報告書の表（report/results.md）と図（report/figures/）を、分析結果から作り直す。
+
+使い方: python tools/render_report_assets.py
+入力: results/cycle*/analysis/analysis.json と report/verdicts.json（事前登録の基準による仮説の判定）
+標準ライブラリだけで動く。report/report.md の本文と report.html は作り直さない。
+"""
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import report_charts  # noqa: E402
+
+root = Path(__file__).resolve().parents[1]
+
+
+{block_src}
+
+results = []
+for p in sorted(root.glob("results/cycle*/analysis/analysis.json")):
+    cycle = int(re.search(r"cycle(\\d+)", p.as_posix()).group(1))
+    results += [r | {{"cycle": cycle}} for r in json.loads(p.read_text(encoding="utf-8")).get("results", [])]
+verdicts = json.loads((root / "report" / "verdicts.json").read_text(encoding="utf-8"))
+(root / "report" / "figures").mkdir(parents=True, exist_ok=True)
+(root / "report" / "results.md").write_text(results_block(results, verdicts) + "\\n", encoding="utf-8")
+for name, svg in report_charts.charts_for(results).items():
+    (root / "report" / "figures" / name).write_text(svg, encoding="utf-8")
+print("report/results.md と report/figures/ を作り直した")
+''', encoding="utf-8")
+
+
 def write_static(ctx: Ctx, verdicts: dict[str, str], *, license_spdx: str, holder: str) -> dict[str, Any]:
     """表・グラフ・ライセンスなど、機械的に作れるものを書く。"""
     results = collect_results(ctx.ws)
@@ -86,6 +131,9 @@ def write_static(ctx: Ctx, verdicts: dict[str, str], *, license_spdx: str, holde
     for name, svg in figs.items():
         (rep / "figures" / name).write_text(svg, encoding="utf-8")
     (rep / "results.md").write_text(results_block(results, verdicts) + "\n", encoding="utf-8")
+    # 表と図を作り直せるよう、判定と、標準ライブラリだけで動く生成スクリプトをリポジトリに入れる
+    (rep / "verdicts.json").write_text(json.dumps(verdicts, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_render_tool(ctx.ws)
     if license_spdx.upper() == "MIT" and not (ctx.ws / "LICENSE").exists():
         (ctx.ws / "LICENSE").write_text(MIT.format(year=dt.date.today().year, holder=holder), encoding="utf-8")
     return {"n_results": len(results), "figures": sorted(figs)}
@@ -115,13 +163,19 @@ AI とシステム開発の基礎を理解している SIer 企業の技術者�
    - 「実験結果」の節に `{RESULTS_MARK}` を1行だけ置く（判定と数値の表が自動で入る）。その下に `{FIGURES_MARK}` を1行置く（グラフが入る）。
    - 表にある数値を本文で引用するときは、表の値をそのまま写す。表にない数値を作らない。
 2. `README.md` — リポジトリの入口。冒頭に「何を調べたか・結果・分からなかったこと・制約」、続けて
-   「再現方法」（依存関係の導入、テスト、予備実験、本実験、分析のコマンド）、「構成」、「研究上の限界」、「引用」、「ライセンス」。
+   「再現方法」（依存関係の導入、テスト、予備実験、本実験、分析のコマンド。pytest の版も書く。
+   表と図の作り直しは `python tools/render_report_assets.py`。`data/external/MANIFEST.json` があれば、
+   先に `python tools/fetch_data.py` で外部データを取得すること）、「構成」、「データ」（外部データを使った場合は
+   出所・ライセンス・再配布していないこと。使っていなければ合成データであること）、「研究上の限界」、
+   「この研究の作られ方」（下の「作られ方」の事実をそのまま書く）、「引用」、「ライセンス」。
 3. `report/talk_script.md` — 10分程度の発表用原稿（話し言葉。スライド見出しごとに区切る）。
 4. `report/future_work.md` — 今後の研究課題（今回の結果から具体的に言えるものだけ）。
 5. `docs/limitations.md` — 研究上の限界を具体的に（データ、規模、手法、一般化できる範囲）。
 6. `docs/references.md` — 参考文献。確認できた書誌情報だけを書く。確認していない文献を挙げない。
 
 ## 守ること
+- 「この研究の作られ方」は、事実の「作られ方」に書かれていることだけを書く。そこに無いこと（使ったモデルの詳細、
+  人が確認した範囲など）を推測で足さない。
 - 結論を誇張しない。支持されなかった仮説・判定保留はそのまま書く。「示した」「証明した」は事前登録の基準を満たしたものだけに使う。
 - 実測した値と、仮定・推測を文の上で区別する（「実測」「仮定」「推測」と明記する）。
 - 事前登録した仮説の検証と、探索的分析を別の段落に分ける。探索的分析から結論を出さない。
@@ -190,6 +244,16 @@ def copy_audit(ws: Path, audit_dirs: list[Path]) -> None:
         shutil.copytree(d, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".home"))
         # 監査の記録には作業用の絶対パスが入るので、公開候補では相対的な表記に置き換える。
         # 毎回、監査の原本から写し直す（公開候補の側で監査記録が書き換えられても元に戻る）
+        # 原論文の要旨は第三者の著作物なので、公開候補には写さない（書誌と取得記録だけを残す）
+        rec = dest / "source_evidence" / "paper_record.json"
+        if rec.exists():
+            try:
+                data = json.loads(rec.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and data.pop("要旨", None) is not None:
+                    data["要旨"] = "（公開候補には含めていない。原論文の要旨は取得元で読める）"
+                    rec.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
+            except ValueError:
+                rec.unlink()
         swaps = [(str(d.parent / "target"), "<監査対象>"), (str(d), "<監査の作業場所>"), (str(d.parent.parent.parent), "<研究の作業領域>"),
                  (str(Path.home()), "~")]
         swaps += [(str(Path(a).resolve()), b) for a, b in swaps if str(Path(a).resolve()) != a]
@@ -274,7 +338,10 @@ def mechanical_publication_checks(ws: Path, source_facts: Any = None) -> dict[st
     report = (ws / "report" / "report.md").read_text(encoding="utf-8") if (ws / "report" / "report.md").exists() else ""
     secrets = wsmod.scan_secrets(ws)
     missing_sections = [s for s in STORY if not re.search(rf"^#+\s*(?:\d+[.．]\s*)?{re.escape(s)}", report, flags=re.M)]
+    from aar import datasets as ds
+
     return {
+        "external_data_problems": ds.verify_manifest(ws),
         "secrets": secrets,
         "has_limitations": bool(re.search(r"^#+.*限界", readme, flags=re.M)) and (ws / "docs" / "limitations.md").exists()
                            and "研究上の限界" not in missing_sections,

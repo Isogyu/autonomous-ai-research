@@ -33,7 +33,7 @@ class ResearchInput:
     max_research_audit_rounds: int = 3
     max_publication_audit_rounds: int = 2
     phase_timeout_minutes: int = 90
-    # 監査からのやり直し（利用者が「公開不可」になった研究を再開した場合）。空なら最初から
+    # やり直し（利用者が、終わった研究を再開した場合）。audit: 独立監査から / publication: 公開品質監査から。空なら最初から
     resume_from: str = ""
     cycle: int = 1
     run_no: int = 1
@@ -202,17 +202,22 @@ class ResearchWorkflow:
     async def _research(self, inp: ResearchInput) -> tuple[str, str]:
         t = inp.phase_timeout_minutes
         started = workflow.now()
-        if inp.resume_from == "audit":
-            # 最後の監査の指摘はまだ直されていない（上限回数で止まったため）。まず直してから、監査をやり直す
+        if inp.resume_from in ("audit", "publication"):
+            # 最後の監査の指摘がまだ直されていなければ（上限回数で止まった場合）、まず直してから監査をやり直す
             self.s.cycle = inp.cycle
             run_no = inp.run_no
+            research_changed = False
             if inp.fix_kind:
                 fix = await self._step(f"fix_{inp.fix_kind}", "fix_audit_findings", inp.fix_kind, inp.fix_round, minutes=t)
                 await self._hold_if_prereg_touched(fix)
+                research_changed = bool(fix.get("research_changed") or fix.get("prereg_touched"))
                 if fix.get("needs_rerun"):
                     run_no += 1
                     await self._rerun(inp, run_no, started)
-            return await self._audit_and_publish(inp, started, run_no, "監査からやり直した")
+            # 公開品質監査からのやり直しでも、直した内容が研究に及んでいれば独立監査からやり直す
+            skip_research = inp.resume_from == "publication" and not research_changed
+            label = "公開品質監査からやり直した" if skip_research else "独立監査からやり直した"
+            return await self._audit_and_publish(inp, started, run_no, label, skip_research=skip_research)
         await self._step("prepare", "prepare_project", minutes=10)
         await self._step("understand", "understand_paper", minutes=t)
 
@@ -248,13 +253,17 @@ class ResearchWorkflow:
 
         return await self._audit_and_publish(inp, started, 1, stop_reason)
 
-    async def _audit_and_publish(self, inp: ResearchInput, started: Any, run_no: int, stop_reason: str) -> tuple[str, str]:
+    async def _audit_and_publish(self, inp: ResearchInput, started: Any, run_no: int, stop_reason: str, *,
+                                 skip_research: bool = False) -> tuple[str, str]:
         t = inp.phase_timeout_minutes
         # --- 独立監査 → 修正 → 再監査
-        research_ok, audit = await self._research_audit_loop(inp, run_no, start_round=inp.start_research_round,
-                                                             extra_rounds=inp.max_research_audit_rounds - 1)
-        if not research_ok:
-            return "not_publishable", self._blocking_text("研究品質ゲートを通過できなかった", audit)
+        if skip_research:
+            self.s.research_audit_round = inp.start_research_round - 1
+        else:
+            research_ok, audit = await self._research_audit_loop(inp, run_no, start_round=inp.start_research_round,
+                                                                 extra_rounds=inp.max_research_audit_rounds - 1)
+            if not research_ok:
+                return "not_publishable", self._blocking_text("研究品質ゲートを通過できなかった", audit)
 
         # --- 発信用の成果物 → 公開品質監査 → 改善
         first_pub = inp.start_publication_round
