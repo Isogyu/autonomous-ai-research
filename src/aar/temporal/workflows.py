@@ -17,7 +17,6 @@ from typing import Any
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
-from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 
 RETRY = RetryPolicy(initial_interval=timedelta(seconds=10), backoff_coefficient=2.0,
                     maximum_interval=timedelta(minutes=5), maximum_attempts=3)
@@ -177,9 +176,11 @@ class ResearchWorkflow:
                 return result
             except ActivityError as e:
                 held = _hold_kind(e)
-                if not held and isinstance(e.cause, TemporalTimeoutError) and workflow.patched("host-sleep-retry"):
-                    # 時間切れの間に PC がスリープしていたなら、実行担当は動けていない。失敗にせず、工程をやり直す
-                    # （回数は限る。スリープが続くなら、人が再開するまで保留にする）
+                if not held and workflow.patched("host-sleep-retry"):
+                    # 工程の間に PC がスリープしていたなら、実行担当は動けていない。失敗にせず、工程をやり直す
+                    # （回数は限る。スリープが続くなら、人が再開するまで保留にする）。
+                    # Temporal の時間切れに限らない: 実行担当の CLI が自分の制限時間で打ち切られると、
+                    # 「監査の結果が正常でない」「工程の失敗」という別の種類の失敗として届く
                     check = await self._quick("host_sleep_check", self.s.project_id, phase, step_started.isoformat(), sleep_retries)
                     if not check["slept"]:
                         raise
@@ -319,7 +320,8 @@ class ResearchWorkflow:
             if rnd == last_pub:
                 return "not_publishable", self._blocking_text("公開品質ゲートを通過できなかった", pub)
             fix = await self._step("fix_publication", "fix_audit_findings", "publication_quality", rnd, minutes=t)
-            if fix.get("research_changed"):
+            await self._hold_if_prereg_touched(fix)
+            if fix.get("research_changed") or fix.get("prereg_touched"):
                 # 研究内容に及ぶ修正をした場合は、研究監査へ戻す
                 if fix.get("needs_rerun"):
                     run_no += 1
@@ -330,7 +332,9 @@ class ResearchWorkflow:
                     return "not_publishable", self._blocking_text("公開向けの修正のあと、研究品質ゲートを通過できなかった", audit)
             await self._step("deliverables", "refresh_deliverables", rnd, minutes=15)
 
-        submit = await self._step("submit", "submit_candidate", minutes=15)
+        submit = await self._step("submit", "submit_candidate", self.s.publication_audit_round, minutes=15)
+        if submit["status"] == "blocked":
+            return "not_publishable", f"提出する最終の内容が、監査に合格した内容と一致しない、または検査を通らない: {submit.get('reason')}"
         note = {"created": f"PR を作成した: {submit.get('url')}", "exists": f"PR は作成済み: {submit.get('url')}",
                 "held": f"公開候補はローカルのブランチにある（PR は保留: {submit.get('reason')}）",
                 "skipped": f"公開候補はローカルのブランチにある（{submit.get('reason')}）"}[submit["status"]]
@@ -359,10 +363,21 @@ class ResearchWorkflow:
             if rnd == last:
                 break
             fix = await self._step("fix_research", "fix_audit_findings", "research", rnd, minutes=inp.phase_timeout_minutes)
+            await self._hold_if_prereg_touched(fix)
             if fix.get("needs_rerun"):
                 run_no += 1
                 await self._rerun(inp, run_no, started)
         return False, audit
+
+    async def _hold_if_prereg_touched(self, fix: dict[str, Any]) -> None:
+        """修正が事前登録を変更していたら、その場で保留にして人に知らせる。
+
+        再開すると研究監査に進む。事前登録が登録時のままでなければ、研究品質ゲートは通らない。
+        """
+        if fix.get("prereg_touched"):
+            await self._wait_resume("prereg_changed", "修正担当が事前登録（prereg/）を変更した。事前登録は登録後に変えられない。"
+                                    "修正のコミットを取り消すなどして登録時の状態に戻してから再開する（aar projects resume）。"
+                                    "このまま再開すると、研究監査で不合格になる")
 
     @staticmethod
     def _blocking_text(head: str, result: dict[str, Any]) -> str:

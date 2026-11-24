@@ -544,3 +544,87 @@ async def test_project_whose_workflow_died_is_reconciled_as_failed(stack, monkey
     assert await service.reconcile_projects() == []                        # 2回目は何もしない
     with connect() as conn:
         assert len(fetch_all(conn, "SELECT 1 FROM workflow_events WHERE project_id = %s AND event = 'reconciled'", (pid,))) == 1
+
+
+async def test_fix_that_touches_preregistration_holds_and_never_passes(stack, monkeypatch):
+    """修正担当が事前登録を変えたら、その場で保留にする。再開しても研究監査に戻り、ゲートは通らない。"""
+    from aar import service
+    from aar.db.core import connect, fetch_all
+
+    monkeypatch.setenv("AAR_MOCK_FIX", "prereg")
+    proposal_id = await _proposal(stack)
+    pid = (await service.select_and_start(proposal_id))["id"]
+    p = await _wait(pid, ("completed", "failed", "on_hold"), timeout=180)
+    assert p["status"] == "on_hold" and "[prereg_changed]" in p["outcome_reason"], p["outcome_reason"]
+    with connect() as conn:
+        impact = fetch_all(conn, "SELECT detail FROM workflow_events WHERE project_id = %s AND event = 'fix_impact' ORDER BY id", (pid,))
+    assert impact[-1]["detail"]["prereg_touched"] and impact[-1]["detail"]["research_changed"]   # 研究への影響として数える
+    assert "prereg" in impact[-1]["detail"]["research_paths_changed"]
+    monkeypatch.delenv("AAR_MOCK_FIX")                                     # 以後の修正は事前登録に触れない（が、変更の履歴は残る）
+    await service.control_project(pid, "resume")
+    p = await _wait(pid, ("completed", "failed"), timeout=180)
+    assert p["outcome"] == "not_publishable" and "事前登録" in p["outcome_reason"], p["outcome_reason"]
+    with connect() as conn:
+        submitted = fetch_all(conn, "SELECT 1 FROM workflow_events WHERE project_id = %s AND event = 'final_check'", (pid,))
+    assert not submitted                                                   # 提出の工程までは進まない
+
+
+async def test_content_added_after_the_audit_is_checked_before_submission(stack, monkeypatch):
+    """監査に合格したあとで公開候補に足される内容（監査の報告）も、提出の直前に検査する。違反があれば公開可にしない。"""
+    import json
+
+    from aar import service
+    from aar.db.core import connect, fetch_one
+    from aar.mock import mock_papers
+    from aar.publish import deliverables as deliv
+
+    proposal_id = await _proposal(stack)
+    pid = (await service.select_and_start(proposal_id))["id"]
+    p = await _wait(pid, ("completed", "failed"))
+    assert p["outcome"] == "publishable", p["outcome_reason"]
+    root = Path(p["workspace_path"]).parent / "audits"
+    ok = json.loads((root / "final_check.json").read_text(encoding="utf-8"))
+    assert ok["problems"] == [] and ok["changed_outside_audit"] == [] and ok["prereg_intact"]
+    assert ok["final_commit"] == ok["required_commit"] != ok["audited_commit"]        # 検査したのは、提出する最終のコミット
+    with connect() as conn:
+        appr = fetch_one(conn, "SELECT detail FROM publication_approvals WHERE project_id = %s", (pid,))
+    assert appr["detail"]["final_check"]["final_commit"] == ok["final_commit"]        # 検査結果が提出の記録に結び付いている
+
+    # 監査の報告を写す処理が、原論文の要旨を持ち込む場合（監査は合格済み）
+    original = deliv.copy_audit
+
+    def leaky(ws, dirs):
+        original(ws, dirs)
+        if any("publication-round" in str(d) for d in dirs):   # 提出の直前（監査のあと）にだけ持ち込む
+            (ws / "audit" / "abstract.md").write_text(mock_papers()[0].abstract + "\n", encoding="utf-8")
+    monkeypatch.setattr(deliv, "copy_audit", leaky)
+    await service.reopen_project(pid, from_="publication")
+    p = await _wait(pid, ("completed", "failed"), timeout=180)
+    assert p["outcome"] == "not_publishable" and "第三者の文章" in p["outcome_reason"], p["outcome_reason"]
+    bad = json.loads((root / "final_check.json").read_text(encoding="utf-8"))
+    assert bad["required_violations"] == ["third_party_text"]
+    with connect() as conn:
+        appr = fetch_one(conn, "SELECT decision, detail FROM publication_approvals WHERE project_id = %s", (pid,))
+    assert appr["decision"] == "pending" and appr["detail"]["status"] == "blocked"
+
+
+async def test_failure_while_the_host_slept_is_retried_then_held(stack, monkeypatch):
+    """工程の間に PC がスリープしていたら、失敗の種類を問わずやり直す。続くなら保留にして、失敗では確定しない。"""
+    from aar import limits, service
+    from aar.db.core import connect, fetch_all
+    from aar.temporal import workflows
+
+    monkeypatch.setenv("AAR_MOCK_PUB", "inconsistent")          # 監査が「結果が正常でない」で失敗し続ける（CLI の打ち切りと同じ種類の失敗）
+    monkeypatch.setattr(limits, "host_sleep_seconds", lambda since, until=None: 1800)
+    proposal_id = await _proposal(stack)
+    pid = (await service.select_and_start(proposal_id))["id"]
+    p = await _wait(pid, ("completed", "failed", "on_hold"), timeout=240)
+    assert p["status"] == "on_hold" and "[host_sleep]" in p["outcome_reason"], p["outcome_reason"]
+    with connect() as conn:
+        checks = fetch_all(conn, "SELECT detail FROM workflow_events WHERE project_id = %s AND event = 'host_sleep_check' ORDER BY id", (pid,))
+    assert len(checks) == workflows.MAX_SLEEP_RETRIES + 1 and all(c["detail"]["slept"] for c in checks)
+    # スリープしていなければ、従来どおり失敗で確定する
+    monkeypatch.setattr(limits, "host_sleep_seconds", lambda since, until=None: 0)
+    await service.control_project(pid, "resume")
+    p = await _wait(pid, ("completed", "failed"), timeout=240)
+    assert p["status"] == "failed" and "正常な結果" in p["outcome_reason"], p["outcome_reason"]

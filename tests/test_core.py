@@ -948,3 +948,8 @@ def test_host_sleep_seconds_are_counted_from_the_power_log():
     assert parse_sleep_seconds(log, at(12, 10), at(12, 30)) == 6 * 60 + 13 * 60 + 50   # 期間の端で切る
     assert parse_sleep_seconds(log, at(13, 0), at(14, 0)) == 30 * 60                   # まだ復帰していないスリープ
     assert parse_sleep_seconds(log, at(10, 0), at(11, 0)) == 0 and parse_sleep_seconds("", at(10, 0), at(11, 0)) == 0
+
+
+def test_preregistration_change_counts_as_a_change_to_the_research():
+    assert touches_research(["prereg/cycle1.json"]) and not touches_code_or_data(["prereg/cycle1.json"])
+    assert not touches_research(["README.md", "docs/limitations.md", "report/report.md"])
