@@ -293,6 +293,136 @@ def limits_cmd(clear: Annotated[str, typer.Option(help="解除を確かめた実
                    f" {(r['message'] or '')[:120]}")
 
 
+improve_app = typer.Typer(help="基盤の改善候補（台帳、評価、採否。基盤には自動で反映しない）", no_args_is_help=True)
+app.add_typer(improve_app, name="improve")
+ActorOpt = Annotated[str | None, typer.Option("--actor", help="操作主体。human / claude_code / codex / scheduler のどれかで始める（例 claude_code:session）。"
+                                                             "省略時は環境変数 AAR_ACTOR")]
+
+
+@improve_app.command("areas")
+def improve_areas(sync: Annotated[bool, typer.Option(help="登録内容を台帳に入れる")] = False) -> None:
+    """継続して調べる領域と外部の資料（読んだ範囲つき）を表示する。"""
+    from aar.improve import areas
+
+    with connect() as conn:
+        if sync:
+            _print(areas.sync(conn))
+        for a in fetch_all(conn, "SELECT key, title, status, target_problem, reject_conditions FROM improvement_areas ORDER BY key"):
+            typer.echo(f"{a['key']:26s} {a['status']:9s} {a['title']}\n    問題: {a['target_problem']}\n    採用しない条件: {a['reject_conditions']}")
+        for s in fetch_all(conn, "SELECT area_key, read_level, version, url FROM improvement_sources ORDER BY area_key, url"):
+            typer.echo(f"  資料 {s['area_key']:26s} 読んだ範囲 {s['read_level']:9s} 版 {s['version'] or '-':10s} {s['url']}")
+
+
+@improve_app.command("scan")
+def improve_scan(propose: Annotated[bool, typer.Option(help="見つけた弱点を候補として登録する")] = False, actor: ActorOpt = None) -> None:
+    """実行の記録から弱点を拾う（記録は読むだけ）。"""
+    from aar.improve import ledger, loop
+
+    found = loop.scan_weaknesses()
+    if propose:
+        who = ledger.parse_actor(actor)
+        with connect() as conn:
+            for w in found:
+                c = loop.propose_from_weakness(conn, w, who)
+                w["candidate"] = {"id": c["id"], "created": c["created"], "status": c["status"]}
+    _print(found)
+
+
+@improve_app.command("plan")
+def improve_plan(actor: ActorOpt = None) -> None:
+    """評価計画と課題を固定し、現行方式の基準値を測る。候補を作る前に実行する。"""
+    from aar.improve import ledger, loop
+
+    who = ledger.parse_actor(actor)
+    with connect() as conn:
+        plan = loop.freeze_plan(conn, who)
+        runs = loop.run_baseline(conn, plan["id"], who)
+    _print({"plan_id": plan["id"], "plan_sha256": plan["plan_sha256"], "created": plan["created"], "splits": plan["plan"]["splits"],
+            "cases": plan["plan"]["cases"],
+            "baseline": {k: {"status": r["status"], "isolation": r["isolation"], "metrics": r["metrics"]} for k, r in runs.items()}})
+
+
+@improve_app.command("generate")
+def improve_generate(candidate_id: str, plan_id: int, actor: ActorOpt = None,
+                     model: Annotated[str, typer.Option(help="実行担当のモデル（空なら方針の implementer）")] = "") -> None:
+    """実行担当に、隔離した複製の中で候補を作らせる。済んでいれば呼び直さない。"""
+    from aar.improve import ledger, loop
+    from aar.temporal.activities import runners_for
+
+    who, choice = ledger.parse_actor(actor), load_policy().research.models["implementer"]
+    with connect() as conn:
+        _print(asyncio.run(loop.generate(conn, candidate_id, plan_id, who, runners_for(get_settings().mode)[choice.agent],
+                                         model=model or choice.model)))
+
+
+@improve_app.command("register")
+def improve_register(candidate_id: str, plan_id: int, actor: ActorOpt = None) -> None:
+    """複製（data_dir/improve/candidates/<ID>/repo）に手で入れた変更を、候補の差分として登録する。"""
+    from aar.improve import ledger, loop
+
+    who = ledger.parse_actor(actor)
+    with connect() as conn:
+        loop.prepare_clone(conn, candidate_id, plan_id)
+        _print(loop.register_patch(conn, candidate_id, who, {"agent": str(who), "isolation": "基盤の複製での手作業"}))
+
+
+@improve_app.command("eval")
+def improve_eval(candidate_id: str, plan_id: int, split: Annotated[str, typer.Option(help="select か sealed")] = "select",
+                 actor: ActorOpt = None) -> None:
+    """候補を、現行方式と同じ課題・同じ条件で評価する。sealed（封印評価）は、候補を選び終えてから 1 回だけ行う。"""
+    from aar.improve import ledger, loop
+
+    if split not in ("dev", "select", "sealed"):
+        raise typer.BadParameter("split は dev / select / sealed")
+    with connect() as conn:
+        r = loop.evaluate_candidate(conn, candidate_id, plan_id, split, ledger.parse_actor(actor))
+    _print({"run_key": r["run_key"], "created": r["created"], "status": r["status"], "failure_kind": r["failure_kind"],
+            "isolation": r["isolation"], "metrics": r["metrics"]})
+
+
+@improve_app.command("decide")
+def improve_decide(candidate_id: str, plan_id: int) -> None:
+    """採否を機械的に判定して記録する（採用候補・棄却・保留）。基盤には反映しない。"""
+    from aar.improve import loop
+
+    with connect() as conn:
+        d = loop.decide_candidate(conn, candidate_id, plan_id)
+    _print({"verdict": d["verdict"], "reasons": d["reasons"], "checks": d["checks"]})
+
+
+@improve_app.command("list")
+def improve_list(text: Annotated[str, typer.Argument(help="問題、仮説、棄却の理由、不採用の条件から探す")] = "",
+                 status: Annotated[str, typer.Option(help="状態で絞る")] = "") -> None:
+    """候補の一覧。"""
+    from aar.improve import ledger
+
+    with connect() as conn:
+        for c in ledger.search(conn, text, status):
+            typer.echo(f"{c['id']}  {c['status']:15s} {c['target']:12s} {c['created_by']:24s} {c['problem'][:70]}")
+            if c["status_reason"]:
+                typer.echo(f"    理由: {c['status_reason'][:200]}")
+            if c["rejected_under"]:
+                typer.echo(f"    不採用の条件: {c['rejected_under'][:200]}")
+
+
+@improve_app.command("show")
+def improve_show(candidate_id: str, patch: Annotated[bool, typer.Option(help="差分も表示する")] = False) -> None:
+    """候補の詳細（根拠、評価、判定、操作の記録）。"""
+    from aar.improve import ledger
+
+    with connect() as conn:
+        c = ledger.get_candidate(conn, candidate_id)
+        out = {"候補": {k: v for k, v in c.items() if k != "patch" or patch},
+               "実行": fetch_all(conn, """SELECT run_key, variant, split, status, failure_kind, isolation, metrics, usage, actor, created_at
+                                         FROM improvement_runs WHERE candidate_id = %s OR (candidate_id IS NULL AND commit_sha = %s)
+                                         ORDER BY id""", (candidate_id, c["base_commit"])),
+               "判定": fetch_all(conn, "SELECT verdict, reasons, checks, decided_by, approved_by, created_at FROM improvement_decisions "
+                                       "WHERE candidate_id = %s ORDER BY id", (candidate_id,)),
+               "操作": fetch_all(conn, "SELECT created_at, event, actor_kind, actor_detail, detail FROM improvement_events "
+                                       "WHERE candidate_id = %s ORDER BY id", (candidate_id,))}
+    _print(out)
+
+
 dev_app = typer.Typer(help="検証用の道具（本番の研究には書き込まない）", no_args_is_help=True)
 app.add_typer(dev_app, name="dev")
 
