@@ -159,13 +159,13 @@ def write_manifest(ws: Path, files: list[dict[str, Any]]) -> None:
     (ws / EXTERNAL_DIR).mkdir(parents=True, exist_ok=True)
     (ws / MANIFEST).write_text(json.dumps({
         "note": "外部から取得したデータの記録。データそのものは再配布していない。tools/fetch_data.py で取得し直す。",
-        "files": sorted(files, key=lambda f: f["filename"])}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        "files": sorted(files, key=lambda f: f["filename"])}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     (ws / "tools").mkdir(exist_ok=True)
-    (ws / "tools" / "fetch_data.py").write_text(FETCH_SCRIPT, encoding="utf-8")
+    (ws / "tools" / "fetch_data.py").write_text(FETCH_SCRIPT, encoding="utf-8", newline="\n")
     gi = ws / ".gitignore"
     text = gi.read_text(encoding="utf-8") if gi.exists() else ""
     if "data/external/*" not in text:
-        gi.write_text(text.rstrip("\n") + "\n" + GITIGNORE_BLOCK, encoding="utf-8")
+        gi.write_text(text.rstrip("\n") + "\n" + GITIGNORE_BLOCK, encoding="utf-8", newline="\n")
 
 
 def verify_manifest(ws: Path) -> list[str]:

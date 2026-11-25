@@ -77,12 +77,12 @@ async def fix_findings(ctx: Ctx, findings: list[dict[str, Any]], *, kind: str, r
     # 修正担当に渡した内容（指摘と証拠）を、証跡として残す
     record = ctx.ws.parent / "audits" / f"fix-{kind}-round{round_no}"
     record.mkdir(parents=True, exist_ok=True)
-    (record / "prompt.md").write_text(prompt, encoding="utf-8")
-    (record / "handed_findings.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    (record / "prompt.md").write_text(prompt, encoding="utf-8", newline="\n")
+    (record / "handed_findings.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2, default=str), encoding="utf-8", newline="\n")
     # 文脈の組み立てに渡した入力も残す（あとで、別の組み立て方と同じ入力で比べられるようにする）
     (record / "context_inputs.json").write_text(json.dumps(
         {"claims": claims or [], "evidence": evidence or [], "budget_chars": DEFAULT_BUDGET_CHARS},
-        ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        ensure_ascii=False, indent=2, default=str), encoding="utf-8", newline="\n")
     res = await ctx.ask("fixer", f"修正（{kind}）", f"{ctx.project_id}:fix:{kind}:{round_no}", prompt,
                         schema=FIX_SCHEMA, writable=True, budget=3.0)
     after = wsmod.commit_all(ctx.ws, f"監査の指摘への対応（{kind}、{round_no}回目）")
@@ -94,7 +94,7 @@ async def fix_findings(ctx: Ctx, findings: list[dict[str, Any]], *, kind: str, r
               "research_paths_changed": sorted(k for k in tree_before if tree_before[k] != tree_after[k]),
               "tree_before": tree_before, "tree_after": tree_after}
     (record / "result.json").write_text(json.dumps({"changed_paths": changed, "impact": impact, "fixed": out.get("fixed", []),
-                                                    "not_fixed": out.get("not_fixed", [])}, ensure_ascii=False, indent=2), encoding="utf-8")
+                                                    "not_fixed": out.get("not_fixed", [])}, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
     return {
         "impact": impact,
         "changed_paths": changed,

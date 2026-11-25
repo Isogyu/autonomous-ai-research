@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import sys
+from pathlib import Path
 
 from temporalio.worker import Worker
 
@@ -30,8 +32,9 @@ async def run_worker(*, schedules: bool = True) -> None:
     )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop.set)
+    _install_stop_handlers(loop, stop)
+    stop_file = stop_request_path(settings.data_dir)
+    stop_file.unlink(missing_ok=True)                  # 前回の停止の依頼が残っていても、起動は妨げない
     async with worker:
         if schedules:
             created = await service.ensure_schedules()
@@ -51,10 +54,33 @@ async def run_worker(*, schedules: bool = True) -> None:
                     log.warning("状態の見回りに失敗: %s", str(e)[:200])
                 await asyncio.sleep(600)
 
+        async def stop_file_loop() -> None:
+            # 停止の依頼をファイルで受ける。Windows には、別のプロセスへ穏やかに終了を伝える POSIX のシグナルがない
+            while not stop_file.exists():
+                await asyncio.sleep(1)
+            stop.set()
+
         watcher = asyncio.create_task(reconcile_loop())
+        stopper = asyncio.create_task(stop_file_loop())
         await stop.wait()
         watcher.cancel()
+        stopper.cancel()
+        stop_file.unlink(missing_ok=True)
         log.info("ワーカーを停止する（実行中の工程は Temporal が再開時にやり直す）")
+
+
+def stop_request_path(data_dir: Path) -> Path:
+    return data_dir / "run" / "worker.stop"
+
+
+def _install_stop_handlers(loop: asyncio.AbstractEventLoop, stop: asyncio.Event) -> None:
+    """終了の合図を受ける。Windows のイベントループは add_signal_handler を持たないので、signal.signal で受けてループへ渡す。"""
+    if sys.platform != "win32":
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop.set)
+        return
+    for sig in (signal.SIGINT, signal.SIGBREAK):           # Ctrl+C と Ctrl+Break
+        signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop.set))
 
 
 def main() -> None:

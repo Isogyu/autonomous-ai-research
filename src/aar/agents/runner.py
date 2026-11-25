@@ -22,6 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
+from aar import proc
 from aar.models import AgentResult
 
 GUARD_PROMPT = (
@@ -134,50 +135,19 @@ async def _exec(
     cmd: list[str], *, cwd: Path, stdin: str | None, timeout_s: int, env: dict[str, str],
     heartbeat: Callable[[], None] | None,
 ) -> tuple[int, str, str, bool]:
-    """サブプロセスを実行する。待つ間も定期的に heartbeat を呼び、時間切れなら確実に終了させる。"""
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=str(cwd), env=env,
-        stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,
-    )
-    comm = asyncio.ensure_future(proc.communicate(stdin.encode() if stdin is not None else None))
-    deadline = time.monotonic() + timeout_s
-    timed_out = False
-    try:
-        while True:
-            done, _ = await asyncio.wait({comm}, timeout=10)
-            if done:
-                break
-            if heartbeat:
-                heartbeat()
-            if time.monotonic() > deadline:
-                timed_out = True
-                break
-    finally:
-        if not comm.done():
-            # 時間切れ、または呼び出し側のキャンセル。プロセスグループごと止める
-            try:
-                os.killpg(proc.pid, 15)
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(asyncio.shield(comm), timeout=10)
-            except (TimeoutError, asyncio.CancelledError):
-                try:
-                    os.killpg(proc.pid, 9)
-                except ProcessLookupError:
-                    pass
-    if timed_out:
+    """サブプロセスを実行する。待つ間も定期的に heartbeat を呼び、時間切れなら子孫ごと確実に終了させる（aar.proc）。"""
+    r = await proc.run(cmd, cwd=cwd, env=env, stdin_data=stdin.encode("utf-8") if stdin is not None else None,
+                       timeout_s=timeout_s, heartbeat=heartbeat, grace_s=10)
+    if r.timed_out:
         return -1, "", "timeout", True
-    out, err = comm.result()
-    return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace"), False
+    return r.returncode, r.stdout, r.stderr, False
 
 
 def _child_env() -> dict[str, str]:
     """子プロセスに渡す環境変数。従量課金の API キーは渡さない（定額契約の認証と混同しないため）。"""
     env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY") and k not in ("GITHUB_TOKEN", "GH_TOKEN")}
     env.pop("CLAUDECODE", None)  # 入れ子の起動と判定されないようにする
+    env.setdefault("PYTHONUTF8", "1")
     return env
 
 
@@ -186,14 +156,19 @@ class ClaudeCodeRunner:
 
     name = "claude"
 
-    def __init__(self, binary: str = "claude") -> None:
+    def __init__(self, binary: str = "") -> None:
         self.binary = binary
+
+    def _launch(self) -> list[str]:
+        from aar.config import get_settings
+
+        return proc.resolve_command("claude", self.binary or get_settings().claude_bin)
 
     async def run(self, prompt, *, cwd, model="", schema=None, tools=None, max_budget_usd=1.0,
                   timeout_s=1800, writable=False, heartbeat=None, log_path=None) -> AgentResult:
         tools = tools if tools is not None else (EDIT_TOOLS if writable else READ_ONLY_TOOLS)
         cmd = [
-            self.binary, "-p", "--output-format", "json",
+            *self._launch(), "-p", "--output-format", "json",
             "--append-system-prompt", GUARD_PROMPT,
             "--tools", ",".join(tools) if tools else "",
             "--permission-mode", "acceptEdits" if writable else "default",
@@ -248,15 +223,20 @@ class CodexRunner:
 
     name = "codex"
 
-    def __init__(self, binary: str = "codex") -> None:
+    def __init__(self, binary: str = "") -> None:
         self.binary = binary
+
+    def _launch(self) -> list[str]:
+        from aar.config import get_settings
+
+        return proc.resolve_command("codex", self.binary or get_settings().codex_bin)
 
     async def run(self, prompt, *, cwd, model="", schema=None, tools=None, max_budget_usd=1.0,
                   timeout_s=1800, writable=False, heartbeat=None, log_path=None) -> AgentResult:
         with tempfile.TemporaryDirectory(prefix="aar-codex-") as td:
             last = Path(td) / "last.txt"
             cmd = [
-                self.binary, "exec", "--json", "--skip-git-repo-check", "--ephemeral",
+                *self._launch(), "exec", "--json", "--skip-git-repo-check", "--ephemeral",
                 "--sandbox", "workspace-write" if writable else "read-only",
                 "-C", str(cwd), "-o", str(last),
             ]
@@ -264,7 +244,7 @@ class CodexRunner:
                 cmd += ["-m", model]
             if schema:
                 sp = Path(td) / "schema.json"
-                sp.write_text(json.dumps(_strict_schema(schema), ensure_ascii=False), encoding="utf-8")
+                sp.write_text(json.dumps(_strict_schema(schema), ensure_ascii=False), encoding="utf-8", newline="\n")
                 cmd += ["--output-schema", str(sp)]
             cmd.append("-")
             started = time.monotonic()
@@ -316,7 +296,7 @@ def _save_log(log_path: Path | None, out: str, err: str) -> None:
         return
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(out + ("\n--- stderr ---\n" + err if err.strip() else ""), encoding="utf-8")
+        log_path.write_text(out + ("\n--- stderr ---\n" + err if err.strip() else ""), encoding="utf-8", newline="\n")
     except OSError:
         pass
 
@@ -365,7 +345,7 @@ def _mock_rate_limit(name: str) -> str | None:
             hit = message or "You've hit your usage limit."
             break
     if hit:
-        Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     return hit
 
 

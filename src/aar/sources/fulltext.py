@@ -195,7 +195,7 @@ async def ensure_fulltext(conn: Any, data_dir: Path, paper: dict[str, Any], cont
         conn.execute("UPDATE papers SET fulltext_status = 'unavailable', fulltext_retrieved_at = now() WHERE id = %s", (paper["id"],))
         return None
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(ft.text, encoding="utf-8")
+    path.write_text(ft.text, encoding="utf-8", newline="\n")
     conn.execute(
         """UPDATE papers SET fulltext_status = 'fulltext_read', fulltext_url = %s, fulltext_sha256 = %s,
                              fulltext_retrieved_at = %s, fulltext_chars = %s WHERE id = %s""",

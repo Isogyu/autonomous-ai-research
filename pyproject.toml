@@ -19,6 +19,8 @@ dependencies = [
   "pyyaml>=6",
   "markdown>=3.6",
   "numpy>=1.26",
+  "psutil>=5.9",                          # 起動・停止の入口（PID の本人確認、子孫の回収）
+  "tzdata; sys_platform == 'win32'",       # Windows には IANA のタイムゾーンのデータがない
 ]
 
 [project.optional-dependencies]
@@ -50,6 +52,8 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
   "db: 実際の PostgreSQL＋pgvector が必要（AAR_TEST_DATABASE_URL を設定したときだけ実行）",
   "live: 外部 API や実際のエージェント CLI を呼ぶ（AAR_LIVE=1 のときだけ実行）",
+  "podman: 実物の Podman でコンテナを動かす（AAR_PODMAN_TESTS=1 のときだけ実行。AAR_REQUIRE_PODMAN=1 なら、使えないときは skip ではなく失敗）",
+  "windows_only: Windows でだけ意味のある確認（ほかの OS では skip。skip は Windows での合格に数えない）",
 ]
 
 [tool.ruff]

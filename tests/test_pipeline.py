@@ -615,7 +615,7 @@ async def test_failure_while_the_host_slept_is_retried_then_held(stack, monkeypa
     from aar.temporal import workflows
 
     monkeypatch.setenv("AAR_MOCK_PUB", "inconsistent")          # 監査が「結果が正常でない」で失敗し続ける（CLI の打ち切りと同じ種類の失敗）
-    monkeypatch.setattr(limits, "host_sleep_seconds", lambda since, until=None: 1800)
+    monkeypatch.setattr(limits, "host_sleep_evidence", lambda since, until=None: limits.SleepEvidence("slept", 1800, "test"))
     proposal_id = await _proposal(stack)
     pid = (await service.select_and_start(proposal_id))["id"]
     p = await _wait(pid, ("completed", "failed", "on_hold"), timeout=240)
@@ -624,7 +624,7 @@ async def test_failure_while_the_host_slept_is_retried_then_held(stack, monkeypa
         checks = fetch_all(conn, "SELECT detail FROM workflow_events WHERE project_id = %s AND event = 'host_sleep_check' ORDER BY id", (pid,))
     assert len(checks) == workflows.MAX_SLEEP_RETRIES + 1 and all(c["detail"]["slept"] for c in checks)
     # スリープしていなければ、従来どおり失敗で確定する
-    monkeypatch.setattr(limits, "host_sleep_seconds", lambda since, until=None: 0)
+    monkeypatch.setattr(limits, "host_sleep_evidence", lambda since, until=None: limits.SleepEvidence("awake", 0, "test"))
     await service.control_project(pid, "resume")
     p = await _wait(pid, ("completed", "failed"), timeout=240)
     assert p["status"] == "failed" and "正常な結果" in p["outcome_reason"], p["outcome_reason"]

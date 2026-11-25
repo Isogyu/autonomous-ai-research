@@ -49,12 +49,66 @@ def doctor() -> None:
         checks.append(("Temporal", True, s.temporal_address))
     except Exception as e:  # noqa: BLE001
         checks.append(("Temporal", False, str(e)[:80]))
-    for name, args in (("Claude Code", ["claude", "--version"]), ("Codex", ["codex", "--version"]),
-                       ("Codex のログイン", ["codex", "login", "status"]), ("GitHub CLI", ["gh", "auth", "status"]),
-                       ("Docker", ["docker", "info", "--format", "{{.ServerVersion}}"]),
-                       ("sandbox-exec", ["sandbox-exec", "-p", "(version 1)(allow default)", "/usr/bin/true"])):
-        ok, detail = cmd(name, args)
-        checks.append((name, ok, detail))
+    import sys
+
+    from aar import container, proc
+
+    def launcher(name: str, override: str) -> list[str] | None:
+        try:
+            return proc.resolve_command(name, override)
+        except proc.LauncherError as e:
+            checks.append((f"{name} の実行ファイル", False, str(e)))
+            return None
+
+    for label, tool, override, rest in (("Claude Code", "claude", s.claude_bin, ["--version"]), ("Codex", "codex", s.codex_bin, ["--version"]),
+                                        ("Codex のログイン", "codex", s.codex_bin, ["login", "status"])):
+        launch = launcher(tool, override)
+        if launch:
+            ok, detail = cmd(label, [*launch, *rest])
+            checks.append((label, ok, f"{detail}（{' '.join(launch)}）" if rest == ["--version"] else detail))
+    checks.append(("GitHub CLI", *cmd("GitHub CLI", ["gh", "auth", "status"])))
+    policy = load_policy()
+    engine_name = s.container_engine if policy.safety.sandbox == "docker" else policy.safety.sandbox
+    if engine_name == "podman":
+        # rootless かどうか、接続先、資源の上限を扱える構成かは、推測せずに接続先へ問い合わせた値を出す
+        try:
+            engine = container.get_engine()
+            info = container.engine_info(engine)
+            checks.append(("Podman", True, f"{info['version']} / {'rootless' if info['rootless'] else 'rootful'} / "
+                                           f"{'リモート接続' if info['remote'] else 'ローカル'}（接続 {info['connection'] or '既定'}）/ "
+                                           f"cgroups {info['cgroup_version']} / {info['os']} {info['arch']}"))
+            from aar.sandbox import experiment_limits
+            for label, image, limits, profile in (
+                    ("実験の隔離の検証", policy.safety.docker_image, experiment_limits(policy.safety), "experiment"),
+                    ("改善候補の実行の隔離の検証", s.improve_image, None, "eval")):
+                if profile == "eval":
+                    from aar.improve import evalkit
+                    try:
+                        d = evalkit.podman_isolation()
+                        checks.append((label, True, f"検証済み（{d['verified_at'][:19]}、イメージ {d['image_id'][:12]}）"))
+                    except container.ContainerError as e:
+                        checks.append((label, False, str(e)[:160]))
+                    continue
+                try:
+                    d = container.require_verified(engine, image, limits, profile, data_dir=s.data_dir, rootful_user=s.podman_rootful_user)
+                    checks.append((label, True, f"検証済み（{d['verified_at'][:19]}、基底イメージ {image}）。依存関係つきのイメージは、初回の実行の前に検証が要る"))
+                except container.ContainerError as e:
+                    checks.append((label, False, str(e)[:160]))
+        except container.ContainerError as e:
+            checks.append(("Podman", False, str(e)[:160]))
+    elif engine_name == "docker":
+        checks.append(("Docker（旧環境専用）", *cmd("Docker", ["docker", "info", "--format", "{{.ServerVersion}}"])))
+    elif engine_name == "seatbelt":
+        checks.append(("sandbox-exec（旧環境専用）", *cmd("sandbox-exec", ["sandbox-exec", "-p", "(version 1)(allow default)", "/usr/bin/true"])))
+    if sys.platform == "win32":
+        checks.append(("Python の UTF-8 モード", bool(sys.flags.utf8_mode), "有効" if sys.flags.utf8_mode else "PYTHONUTF8=1 を設定する（scripts/aarctl.ps1 は設定して起動する）"))
+    from aar import limits as limits_mod
+    ev = limits_mod.host_sleep_evidence(dt.datetime.now(dt.UTC) - dt.timedelta(minutes=5))
+    checks.append(("ホストの電源の記録", ev.status != "unknown", f"{ev.source}: {ev.status} {ev.detail}".strip()))
+    if s.timezone:
+        now = dt.datetime.now(dt.UTC)
+        same = now.astimezone().utcoffset() == now.astimezone(__import__("zoneinfo").ZoneInfo(s.timezone)).utcoffset()
+        checks.append(("タイムゾーン", same, f"設定 {s.timezone}" + ("" if same else "。OS の設定と時差がある（実行担当の CLI が表示する解除時刻は OS の設定で読む）")))
     from aar.audit.research import skill_available
     checks.append(("研究独立監査 Skill", skill_available(s.research_audit_skill_dir), str(s.research_audit_skill_dir)))
     checks.append(("GitHub 公開品質監査 Skill", skill_available(s.publication_audit_skill_dir),
@@ -63,10 +117,107 @@ def doctor() -> None:
     from aar.memory.embed import get_embedder
     emb = get_embedder(s.embedding_model)
     checks.append(("埋め込みモデル", emb.semantic, emb.name + ("" if emb.semantic else "（代用。意味の近さは捉えない）")))
-    policy = load_policy()
-    checks.append(("方針ファイル", True, f"sha256 {policy.sha256[:12]} / sandbox={policy.safety.sandbox}"))
+    checks.append(("方針ファイル", True, f"sha256 {policy.sha256[:12]} / sandbox={policy.safety.sandbox}（エンジン: {engine_name}）"))
     for name, ok, detail in checks:
         typer.echo(f"{'✓' if ok else '✗'} {name}: {detail}")
+
+
+ctl_app = typer.Typer(help="基盤の起動・停止・状態確認（Windows は scripts/aarctl.ps1 から呼ぶ）", no_args_is_help=True)
+podman_app = typer.Typer(help="Podman の構成の確認と、隔離の検証", no_args_is_help=True)
+app.add_typer(ctl_app, name="ctl")
+app.add_typer(podman_app, name="podman")
+
+
+def _lines(fn: Any, *a: Any, **kw: Any) -> None:
+    try:
+        for line in fn(*a, **kw):
+            typer.echo(line)
+    except Exception as e:  # noqa: BLE001 - 入口では、原因を 1 行で示して失敗の終了コードを返す
+        typer.echo(f"失敗: {e}", err=True)
+        raise typer.Exit(1) from e
+
+
+@ctl_app.command("start")
+def ctl_start() -> None:
+    """PostgreSQL（Podman）、Temporal、ワーカー、UI を起動する。起動済みのものはそのまま。"""
+    from aar import ctl
+    _lines(ctl.start)
+
+
+@ctl_app.command("stop")
+def ctl_stop(all_: Annotated[bool, typer.Option("--all", help="PostgreSQL のコンテナも止める")] = False) -> None:
+    """UI、ワーカー、Temporal を止める。研究の状態は PostgreSQL と Temporal の履歴に残る。"""
+    from aar import ctl
+    _lines(ctl.stop, everything=all_)
+
+
+@ctl_app.command("restart-worker")
+def ctl_restart_worker() -> None:
+    """コードや設定を変えたあとに、ワーカーだけを入れ替える。"""
+    from aar import ctl
+    _lines(ctl.restart_worker)
+
+
+@ctl_app.command("status")
+def ctl_status() -> None:
+    """各サービスの状態、残っている実行用のコンテナ、待ち受けの範囲を表示する。"""
+    from aar import ctl
+    _lines(ctl.status)
+
+
+@ctl_app.command("logs")
+def ctl_logs(name: Annotated[str, typer.Argument(help="temporal / worker / ui")] = "worker", lines: int = 50) -> None:
+    from aar import ctl
+    typer.echo(ctl.logs(name, lines))
+
+
+@podman_app.command("info")
+def podman_info() -> None:
+    """接続先の Podman の構成（版、rootless かどうか、リモートかどうか、cgroups）を表示する。"""
+    from aar import container
+    try:
+        _print(container.engine_info(container.get_engine()))
+    except container.ContainerError as e:
+        typer.echo(f"失敗: {e}", err=True)
+        raise typer.Exit(1) from e
+
+
+@podman_app.command("verify")
+def podman_verify(image: Annotated[str, typer.Option(help="検証するイメージ。省略すると、実験の基底イメージと改善候補のイメージ")] = "",
+                  workspace: Annotated[str, typer.Option(help="この研究の作業領域の、依存関係つきの実験用イメージも検証する（研究 ID）")] = "") -> None:
+    """隔離の指定が、この環境のコンテナの中で実際に効くことを確かめて記録する。通らない構成では、実験も評価も実行しない。"""
+    from aar import container, sandbox
+    from aar.improve import evalkit
+
+    s, policy = get_settings(), load_policy()
+    try:
+        engine = container.get_engine()
+        targets: list[tuple[str, container.Limits]] = []
+        if image:
+            targets += [(image, sandbox.experiment_limits(policy.safety)), (image, evalkit.PODMAN_LIMITS)]
+        else:
+            targets.append((policy.safety.docker_image, sandbox.experiment_limits(policy.safety)))
+            if s.improve_image:
+                targets.append((s.improve_image, evalkit.PODMAN_LIMITS))
+        if workspace:
+            ws = s.workspaces_dir / workspace / "repo"
+            targets.append((asyncio.run(sandbox.ensure_podman_image(engine, policy.safety, ws)), sandbox.experiment_limits(policy.safety)))
+        failed = False
+        for img, limits in targets:
+            v = asyncio.run(container.verify(engine, img, limits, scratch=s.data_dir / "podman" / "scratch", rootful_user=s.podman_rootful_user))
+            path = container.save_verification(s.data_dir, v)
+            typer.echo(f"\n{img}（メモリ {limits.memory}、CPU {limits.cpus}、プロセス {limits.pids}）→ {path}")
+            typer.echo(f"  構成: Podman {v.info['version']} / {'rootless' if v.info['rootless'] else 'rootful'} / "
+                       f"{'リモート' if v.info['remote'] else 'ローカル'} / cgroups {v.info['cgroup_version']}")
+            for c in v.checks:
+                typer.echo(f"  {'✓' if c['passed'] else '✗'} [{c.get('profile', '共通')}] {c['name']}: {c['detail'][:120]}")
+            typer.echo(f"  結果: eval={'合格' if v.profiles['eval'] else '不合格'} / experiment={'合格' if v.profiles['experiment'] else '不合格'}")
+            failed = failed or not v.passed
+    except container.ContainerError as e:
+        typer.echo(f"失敗: {e}", err=True)
+        raise typer.Exit(1) from e
+    if failed:
+        raise typer.Exit(1)
 
 
 @app.command("migrate")
