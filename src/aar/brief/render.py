@@ -14,7 +14,7 @@ import html
 import json
 from typing import Any
 
-from aar.brief.model import PURPOSE_GAIN, PURPOSE_LABEL, VERIFICATION_LABEL, Brief, width
+from aar.brief.model import PURPOSE_GAIN, PURPOSE_LABEL, VERIFICATION_LABEL, Brief
 
 CARD_W, CARD_MAX_H, PAD = 1024, 1024, 56
 MIN_FONT = 32                     # 幅 360 の画面に縮小されても 11px 相当を保つ下限（設計上の提案。実機での確認が要る）
@@ -32,6 +32,14 @@ BADGE = {
 }
 
 
+def vis(text: str) -> float:
+    """描いたときの幅の見積もり（全角 2 を単位）。英数字は、太字やフォントの違いを見込んで、半角 1 より広く数える。
+
+    フォントは環境で変わるので、実際の幅は測れない。はみ出すより、余るほうへ倒す。
+    """
+    return sum(2.0 if ord(ch) > 0x2E7F else (0.7 if ch == " " else 1.3) for ch in text)
+
+
 class DoesNotFit(ValueError):
     """カードに収まらない。文字を小さくせず、内容を減らす。"""
 
@@ -42,28 +50,28 @@ def wrap(text: str, units: int) -> list[str]:
     token = ""
     def flush_token() -> None:
         nonlocal cur, cur_w, token
-        tw = width(token)
+        tw = vis(token)
         if cur and cur_w + tw > units:
             lines.append(cur.rstrip())
             cur, cur_w = "", 0
-        while width(token) > units:                       # 1 語が 1 行より長い
-            cut, used = "", 0
+        while vis(token) > units:                         # 1 語が 1 行より長い
+            cut, used = "", 0.0
             for ch in token:
-                if used + width(ch) > units:
+                if used + vis(ch) > units:
                     break
-                cut, used = cut + ch, used + width(ch)
+                cut, used = cut + ch, used + vis(ch)
             lines.append(cut)
             token = token[len(cut):]
-        cur, cur_w = cur + token, cur_w + width(token)
+        cur, cur_w = cur + token, cur_w + vis(token)
         token = ""
     for ch in text:
         if ord(ch) > 0x2E7F or ch == " ":
             flush_token()
-            if cur_w + width(ch) > units:
+            if cur_w + vis(ch) > units and ch not in "。、）」":      # 句読点と閉じ括弧は、行の頭に送らない
                 lines.append(cur.rstrip())
                 cur, cur_w = "", 0
             if not (ch == " " and not cur):
-                cur, cur_w = cur + ch, cur_w + width(ch)
+                cur, cur_w = cur + ch, cur_w + vis(ch)
         else:
             token += ch
     flush_token()
@@ -84,7 +92,7 @@ def _text(x: float, y: float, s: str, font: int, *, fill: str = INK, weight: int
 
 
 def _badge(x: float, y: float, label: str, style: dict[str, str], font: int = 34) -> tuple[str, float]:
-    w = width(label) * font / 2 + 36
+    w = vis(label) * font / 2 + 36
     dash = f' stroke-dasharray="{style["dash"]}"' if style["dash"] else ""
     return (f'<rect x="{x:.0f}" y="{y:.0f}" width="{w:.0f}" height="{font + 22}" rx="10" fill="{style["fill"]}" stroke="{style["stroke"]}" '
             f'stroke-width="3"{dash}/>' + _text(x + 18, y + font + 4, label, font, fill=style["ink"], weight=700)), w
@@ -125,8 +133,8 @@ def card_svg(b: Brief) -> str:
         label_w = 330
         col_w = (inner - label_w) / len(d.columns)
         row_h = 70
-        too_wide = [c for c in [*d.columns, *(c for r in d.rows for c in r.cells)] if width(c) * 17 > col_w - 12] \
-            + [r.label for r in d.rows if width(r.label) * 17 > label_w - 12]
+        too_wide = [c for c in [*d.columns, *(c for r in d.rows for c in r.cells)] if vis(c) * 17 > col_w - 12] \
+            + [r.label for r in d.rows if vis(r.label) * 17 > label_w - 12]
         if too_wide:
             raise DoesNotFit("比較の欄に収まらない文字がある（観点を減らすか、言葉を短くする）: " + "、".join(too_wide))
         out.append(f'<rect x="{PAD}" y="{y}" width="{inner}" height="{row_h}" fill="{PANEL}"/>')
@@ -145,6 +153,8 @@ def card_svg(b: Brief) -> str:
                 out.append(_text(PAD + 26, y + 34, "↓", 34, fill=SUB, anchor="middle"))
                 y += 42
             h = 64 + (44 if r.note else 0)
+            if vis(r.label) * 18 > inner - 84 or vis(r.note) * (MIN_FONT / 2) > inner - 84:
+                raise DoesNotFit(f"図の項目が幅に収まらない（言葉を短くする）: {r.label}")
             out.append(f'<rect x="{PAD}" y="{y}" width="{inner}" height="{h}" rx="10" fill="{PANEL}"/>')
             marker = {"steps": str(i), "flow": "", "structure": "・"}[d.kind]
             tx = PAD + 20

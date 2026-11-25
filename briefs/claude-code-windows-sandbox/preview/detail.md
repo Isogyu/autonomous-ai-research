@@ -18,7 +18,7 @@ Claude Code は Windows 10 1809 以降に直接入れられる。ただし、OS 
 ## 重要な制約
 
 - 社内で Claude Code と WSL 2 を使えるかは未確認
-- サンドボックスが何を制限するかは、まだ読んでいない
+- サンドボックスの制限の範囲は、まだ読んでいない
 
 ## 要点
 
@@ -28,9 +28,9 @@ Claude Code は Windows 10 1809 以降に直接入れられる。ただし、OS 
 
 ## 導入の形で、何が変わるか
 
-- Windows に直接: サンドボックス は 非対応、Git for Windows は 推奨
-- WSL 2: サンドボックス は 対応、Git for Windows は 不要
-- WSL 1: サンドボックス は 非対応、Git for Windows は 不要
+- Windows に直接: サンドボックス は 非対応、Git の追加 は 推奨
+- WSL 2: サンドボックス は 対応、Git の追加 は 不要
+- WSL 1: サンドボックス は 非対応、Git の追加 は 不要
 
 公式の文書の表によると、OS によるサンドボックスに対応するのは WSL 2 だけで、Windows に直接入れた場合と WSL 1 は対応していない。Git for Windows は、Windows に直接入れる場合に推奨されている（無い場合は PowerShell が使われる）。WSL では不要。
 

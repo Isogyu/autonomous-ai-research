@@ -17,7 +17,7 @@ takeaways:
   - コンテナの中から、通信・書き込み・上限を確かめる
   - 確かめていない構成では、実行しない作りにした
 constraints:
-  - 確かめたのは Linux の CI だけ。Windows は未確認
+  - 確認は Linux だけ。Windows は未確認
   - '手順のコードは未マージ（PR #12）'
 unconfirmed:
   - Windows 上の Podman の仮想環境で、同じ確認が通るか

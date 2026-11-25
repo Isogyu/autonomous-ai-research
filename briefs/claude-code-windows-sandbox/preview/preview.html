@@ -16,16 +16,16 @@ details{margin-top:1rem}code,pre.code{font-family:ui-monospace,Consolas,monospac
 <p class="note">これはローカルのプレビュー。<strong>Teams には送信していない。</strong>下の枠は幅を合わせた近似で、Teams の実際の表示ではない
 （Teams のデスクトップとモバイルでの表示、画像の取得、Adaptive Card の表示は、社内の環境で確かめる必要がある）。</p>
 <h2>レビューする人が見るもの</h2>
-<table><tr><th>状態</th><td>下書き</td></tr><tr><th>内容のハッシュ</th><td><code>f16ecbf0b53eca34</code></td></tr>
+<table><tr><th>状態</th><td>下書き</td></tr><tr><th>内容のハッシュ</th><td><code>6620aa22e4b58904</code></td></tr>
 <tr><th>配信の扱い</th><td>candidate: 開発の対象を Windows に移す時期で、導入の形の判断に直接かかわる。一次情報で確かめられる</td></tr>
 <tr><th>対象の読者</th><td>社内の Windows PC で、AI のコーディング支援を試そうとしている開発の担当 — 社内の PC は Windows。導入の形（Windows に直接か、WSL 2 か）で、使える機能が変わる</td></tr>
 <tr><th>読者のニーズ</th><td>社内の Windows PC で AI のコーディング支援を試したい開発の担当は、導入の形を決める前に、形によって何が変わるかを把握したい。それは、申請や環境の準備をやり直さずに済む。<br>根拠: 仮定（読者に確かめていない） — 読者に確かめていない。この読者がいるか、何に困っているかは、docs/briefs/reader-needs.md の質問で確かめる</td></tr>
 <tr><th>既存の情報からの変化</th><td>「Windows では WSL が必要」という理解は古い。Windows に直接入れられるが、サンドボックスの対応は導入の形で違う</td></tr><tr><th>今知らせる理由</th><td>開発の対象を社内の Windows PC に移す準備を始めた。導入の形を決める前に知っておく必要がある</td></tr>
 <tr><th>似た投稿</th><td>なし（これが最初の投稿候補なので、似た投稿はなし）</td></tr></table>
-<h3>機械的な確認</h3><table><tr><th></th><th>項目</th><th>結果</th></tr><tr><td>✓</td><td>カードに収まる（文字の大きさの下限を保つ）</td><td>文字の下限 32、幅 1024</td></tr><tr><td>✓</td><td>Adaptive Card の大きさが上限以内</td><td>2267 バイト（上限 28672）</td></tr><tr><td>✓</td><td>秘密情報・作業用のパスがない</td><td>検出なし（既知の形式の照合。未知の形式は見つけられない）</td></tr><tr><td>✓</td><td>メールアドレスがない</td><td>検出なし</td></tr><tr><td>✗</td><td>第三者の文章を、まとまった長さで写していない</td><td>照合元の文章が手元にない（briefs/&lt;id&gt;/sources/*.txt に置くと照合する）。置けない場合は、承認する人が確かめて申告する</td></tr><tr><td>✓</td><td>要点と制約が、本文と詳細ページの両方にある</td><td>すべてある</td></tr><tr><td>✓</td><td>「情報紹介・未再現」が、カード・本文・詳細ページのすべてにある</td><td>表示あり</td></tr><tr><td>✓</td><td>「知る」が、カード・本文・詳細ページのすべてにある</td><td>表示あり</td></tr><tr><td>✓</td><td>出典の一覧にない URL が出力にない</td><td>なし</td></tr></table>
+<h3>機械的な確認</h3><table><tr><th></th><th>項目</th><th>結果</th></tr><tr><td>✓</td><td>カードに収まる（文字の大きさの下限を保つ）</td><td>文字の下限 32、幅 1024</td></tr><tr><td>✓</td><td>Adaptive Card の大きさが上限以内</td><td>2255 バイト（上限 28672）</td></tr><tr><td>✓</td><td>秘密情報・作業用のパスがない</td><td>検出なし（既知の形式の照合。未知の形式は見つけられない）</td></tr><tr><td>✓</td><td>メールアドレスがない</td><td>検出なし</td></tr><tr><td>✗</td><td>第三者の文章を、まとまった長さで写していない</td><td>照合元の文章が手元にない（briefs/&lt;id&gt;/sources/*.txt に置くと照合する）。置けない場合は、承認する人が確かめて申告する</td></tr><tr><td>✓</td><td>要点と制約が、本文と詳細ページの両方にある</td><td>すべてある</td></tr><tr><td>✓</td><td>「情報紹介・未再現」が、カード・本文・詳細ページのすべてにある</td><td>表示あり</td></tr><tr><td>✓</td><td>「知る」が、カード・本文・詳細ページのすべてにある</td><td>表示あり</td></tr><tr><td>✓</td><td>出典の一覧にない URL が出力にない</td><td>なし</td></tr></table>
 <h3>人に見てほしい点</h3><ul><li>読者のニーズは仮定（読者に確かめていない）。読者に確かめていない。この読者がいるか、何に困っているかは、docs/briefs/reader-needs.md の質問で確かめる</li></ul>
 <h2>Teams の投稿（近似）</h2>
-<div class="frames"><div class="frame desk"><h3>デスクトップの幅（約 600px）</h3><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 978" width="1024" height="978" role="img" aria-label="知る・情報紹介・未再現。Claude Code は Windows で動く。隔離は WSL 2 だけ。図: 導入の形で、何が変わるか（内容は本文に文章で記載）" font-family="'Yu Gothic UI','Meiryo','Hiragino Sans','Noto Sans JP',sans-serif"><title>知る・情報紹介・未再現。Claude Code は Windows で動く。隔離は WSL 2 だけ。図: 導入の形で、何が変わるか（内容は本文に文章で記載）</title><rect width="100%" height="100%" fill="#ffffff"/><rect x="56" y="56" width="104" height="56" rx="10" fill="#111111" stroke="#111111" stroke-width="3"/><text x="74" y="94" font-size="34" font-weight="700" fill="#ffffff" text-anchor="start">知る</text><rect x="176" y="56" width="308" height="56" rx="10" fill="#ffffff" stroke="#111111" stroke-width="3" stroke-dasharray="10 6"/><text x="194" y="94" font-size="34" font-weight="700" fill="#111111" text-anchor="start">情報紹介・未再現</text><text x="56" y="200" font-size="54" font-weight="700" fill="#111111" text-anchor="start">Claude Code は Windows で動く。隔</text><text x="56" y="262" font-size="54" font-weight="700" fill="#111111" text-anchor="start">離は WSL 2 だけ</text><text x="56" y="336" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="start">導入の形で、何が変わるか</text><rect x="56" y="354" width="912" height="70" fill="#eef2f7"/><text x="532" y="400" font-size="34" font-weight="700" fill="#454545" text-anchor="middle">サンドボックス</text><text x="822" y="400" font-size="34" font-weight="700" fill="#454545" text-anchor="middle">Git for Windows</text><text x="64" y="470" font-size="34" font-weight="700" fill="#111111" text-anchor="start">Windows に直接</text><text x="532" y="470" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">非対応</text><text x="822" y="470" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">推奨</text><line x1="56" y1="494" x2="968" y2="494" stroke="#8a8a8a" stroke-width="2"/><text x="64" y="540" font-size="34" font-weight="700" fill="#111111" text-anchor="start">WSL 2</text><text x="532" y="540" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">対応</text><text x="822" y="540" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">不要</text><line x1="56" y1="564" x2="968" y2="564" stroke="#8a8a8a" stroke-width="2"/><text x="64" y="610" font-size="34" font-weight="700" fill="#111111" text-anchor="start">WSL 1</text><text x="532" y="610" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">非対応</text><text x="822" y="610" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">不要</text><line x1="56" y1="634" x2="968" y2="634" stroke="#8a8a8a" stroke-width="2"/><rect x="56" y="658" width="912" height="214" rx="10" fill="#fff1c2" stroke="#4a3200" stroke-width="2"/><text x="76" y="704" font-size="34" font-weight="700" fill="#4a3200" text-anchor="start">条件・制約</text><text x="76" y="758" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">・社内で Claude Code と WSL 2 を使えるかは未確認</text><text x="76" y="804" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">・サンドボックスが何を制限するかは、まだ読んでいな</text><text x="76" y="850" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">い</text><text x="56" y="936" font-size="32" font-weight="400" fill="#454545" text-anchor="start">出典: Anthropic（確認 2026-11-25）</text></svg>
+<div class="frames"><div class="frame desk"><h3>デスクトップの幅（約 600px）</h3><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 932" width="1024" height="932" role="img" aria-label="知る・情報紹介・未再現。Claude Code は Windows で動く。隔離は WSL 2 だけ。図: 導入の形で、何が変わるか（内容は本文に文章で記載）" font-family="'Yu Gothic UI','Meiryo','Hiragino Sans','Noto Sans JP',sans-serif"><title>知る・情報紹介・未再現。Claude Code は Windows で動く。隔離は WSL 2 だけ。図: 導入の形で、何が変わるか（内容は本文に文章で記載）</title><rect width="100%" height="100%" fill="#ffffff"/><rect x="56" y="56" width="104" height="56" rx="10" fill="#111111" stroke="#111111" stroke-width="3"/><text x="74" y="94" font-size="34" font-weight="700" fill="#ffffff" text-anchor="start">知る</text><rect x="176" y="56" width="308" height="56" rx="10" fill="#ffffff" stroke="#111111" stroke-width="3" stroke-dasharray="10 6"/><text x="194" y="94" font-size="34" font-weight="700" fill="#111111" text-anchor="start">情報紹介・未再現</text><text x="56" y="200" font-size="54" font-weight="700" fill="#111111" text-anchor="start">Claude Code は Windows で動く。</text><text x="56" y="262" font-size="54" font-weight="700" fill="#111111" text-anchor="start">隔離は WSL 2 だけ</text><text x="56" y="336" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="start">導入の形で、何が変わるか</text><rect x="56" y="354" width="912" height="70" fill="#eef2f7"/><text x="532" y="400" font-size="34" font-weight="700" fill="#454545" text-anchor="middle">サンドボックス</text><text x="822" y="400" font-size="34" font-weight="700" fill="#454545" text-anchor="middle">Git の追加</text><text x="64" y="470" font-size="34" font-weight="700" fill="#111111" text-anchor="start">Windows に直接</text><text x="532" y="470" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">非対応</text><text x="822" y="470" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">推奨</text><line x1="56" y1="494" x2="968" y2="494" stroke="#8a8a8a" stroke-width="2"/><text x="64" y="540" font-size="34" font-weight="700" fill="#111111" text-anchor="start">WSL 2</text><text x="532" y="540" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">対応</text><text x="822" y="540" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">不要</text><line x1="56" y1="564" x2="968" y2="564" stroke="#8a8a8a" stroke-width="2"/><text x="64" y="610" font-size="34" font-weight="700" fill="#111111" text-anchor="start">WSL 1</text><text x="532" y="610" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">非対応</text><text x="822" y="610" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">不要</text><line x1="56" y1="634" x2="968" y2="634" stroke="#8a8a8a" stroke-width="2"/><rect x="56" y="658" width="912" height="168" rx="10" fill="#fff1c2" stroke="#4a3200" stroke-width="2"/><text x="76" y="704" font-size="34" font-weight="700" fill="#4a3200" text-anchor="start">条件・制約</text><text x="76" y="758" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">・社内で Claude Code と WSL 2 を使えるかは未確認</text><text x="76" y="804" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">・サンドボックスの制限の範囲は、まだ読んでいない</text><text x="56" y="890" font-size="32" font-weight="400" fill="#454545" text-anchor="start">出典: Anthropic（確認 2026-11-25）</text></svg>
 <pre>【知る｜情報紹介・未再現】Claude Code は Windows で動く。隔離は WSL 2 だけ
 
 要点
@@ -35,12 +35,12 @@ details{margin-top:1rem}code,pre.code{font-family:ui-monospace,Consolas,monospac
 
 条件・制約
 ・社内で Claude Code と WSL 2 を使えるかは未確認
-・サンドボックスが何を制限するかは、まだ読んでいない
+・サンドボックスの制限の範囲は、まだ読んでいない
 
 図の内容（導入の形で、何が変わるか）
-Windows に直接: サンドボックス は 非対応、Git for Windows は 推奨
-WSL 2: サンドボックス は 対応、Git for Windows は 不要
-WSL 1: サンドボックス は 非対応、Git for Windows は 不要
+Windows に直接: サンドボックス は 非対応、Git の追加 は 推奨
+WSL 2: サンドボックス は 対応、Git の追加 は 不要
+WSL 1: サンドボックス は 非対応、Git の追加 は 不要
 
 検証の状況: 情報紹介・未再現 — 提供元の公式の文書を読んだだけ。自分たちは Windows で動かしていない
 確かめていない点: 社内で Claude Code と WSL 2 の利用が許可されているか ／ サンドボックスが制限する範囲（ファイル、通信）。該当する文書を読んでいない ／ 自分たちの Windows PC での動作
@@ -50,7 +50,7 @@ WSL 1: サンドボックス は 非対応、Git for Windows は 不要
 ・Advanced setup（Claude Code Docs）（Anthropic、一次情報、確認日 2026-11-25、対象の版: ページに更新日と版の記載なし（文中の例は 2.1.89、2.1.211、2.1.323））https://code.claude.com/docs/en/setup
 
 詳細: 詳細ページの保存先が未定（ローカルのプレビューだけがある）
-</pre></div><div class="frame mob"><h3>モバイルの幅（約 336px）</h3><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 978" width="1024" height="978" role="img" aria-label="知る・情報紹介・未再現。Claude Code は Windows で動く。隔離は WSL 2 だけ。図: 導入の形で、何が変わるか（内容は本文に文章で記載）" font-family="'Yu Gothic UI','Meiryo','Hiragino Sans','Noto Sans JP',sans-serif"><title>知る・情報紹介・未再現。Claude Code は Windows で動く。隔離は WSL 2 だけ。図: 導入の形で、何が変わるか（内容は本文に文章で記載）</title><rect width="100%" height="100%" fill="#ffffff"/><rect x="56" y="56" width="104" height="56" rx="10" fill="#111111" stroke="#111111" stroke-width="3"/><text x="74" y="94" font-size="34" font-weight="700" fill="#ffffff" text-anchor="start">知る</text><rect x="176" y="56" width="308" height="56" rx="10" fill="#ffffff" stroke="#111111" stroke-width="3" stroke-dasharray="10 6"/><text x="194" y="94" font-size="34" font-weight="700" fill="#111111" text-anchor="start">情報紹介・未再現</text><text x="56" y="200" font-size="54" font-weight="700" fill="#111111" text-anchor="start">Claude Code は Windows で動く。隔</text><text x="56" y="262" font-size="54" font-weight="700" fill="#111111" text-anchor="start">離は WSL 2 だけ</text><text x="56" y="336" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="start">導入の形で、何が変わるか</text><rect x="56" y="354" width="912" height="70" fill="#eef2f7"/><text x="532" y="400" font-size="34" font-weight="700" fill="#454545" text-anchor="middle">サンドボックス</text><text x="822" y="400" font-size="34" font-weight="700" fill="#454545" text-anchor="middle">Git for Windows</text><text x="64" y="470" font-size="34" font-weight="700" fill="#111111" text-anchor="start">Windows に直接</text><text x="532" y="470" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">非対応</text><text x="822" y="470" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">推奨</text><line x1="56" y1="494" x2="968" y2="494" stroke="#8a8a8a" stroke-width="2"/><text x="64" y="540" font-size="34" font-weight="700" fill="#111111" text-anchor="start">WSL 2</text><text x="532" y="540" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">対応</text><text x="822" y="540" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">不要</text><line x1="56" y1="564" x2="968" y2="564" stroke="#8a8a8a" stroke-width="2"/><text x="64" y="610" font-size="34" font-weight="700" fill="#111111" text-anchor="start">WSL 1</text><text x="532" y="610" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">非対応</text><text x="822" y="610" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">不要</text><line x1="56" y1="634" x2="968" y2="634" stroke="#8a8a8a" stroke-width="2"/><rect x="56" y="658" width="912" height="214" rx="10" fill="#fff1c2" stroke="#4a3200" stroke-width="2"/><text x="76" y="704" font-size="34" font-weight="700" fill="#4a3200" text-anchor="start">条件・制約</text><text x="76" y="758" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">・社内で Claude Code と WSL 2 を使えるかは未確認</text><text x="76" y="804" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">・サンドボックスが何を制限するかは、まだ読んでいな</text><text x="76" y="850" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">い</text><text x="56" y="936" font-size="32" font-weight="400" fill="#454545" text-anchor="start">出典: Anthropic（確認 2026-11-25）</text></svg>
+</pre></div><div class="frame mob"><h3>モバイルの幅（約 336px）</h3><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 932" width="1024" height="932" role="img" aria-label="知る・情報紹介・未再現。Claude Code は Windows で動く。隔離は WSL 2 だけ。図: 導入の形で、何が変わるか（内容は本文に文章で記載）" font-family="'Yu Gothic UI','Meiryo','Hiragino Sans','Noto Sans JP',sans-serif"><title>知る・情報紹介・未再現。Claude Code は Windows で動く。隔離は WSL 2 だけ。図: 導入の形で、何が変わるか（内容は本文に文章で記載）</title><rect width="100%" height="100%" fill="#ffffff"/><rect x="56" y="56" width="104" height="56" rx="10" fill="#111111" stroke="#111111" stroke-width="3"/><text x="74" y="94" font-size="34" font-weight="700" fill="#ffffff" text-anchor="start">知る</text><rect x="176" y="56" width="308" height="56" rx="10" fill="#ffffff" stroke="#111111" stroke-width="3" stroke-dasharray="10 6"/><text x="194" y="94" font-size="34" font-weight="700" fill="#111111" text-anchor="start">情報紹介・未再現</text><text x="56" y="200" font-size="54" font-weight="700" fill="#111111" text-anchor="start">Claude Code は Windows で動く。</text><text x="56" y="262" font-size="54" font-weight="700" fill="#111111" text-anchor="start">隔離は WSL 2 だけ</text><text x="56" y="336" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="start">導入の形で、何が変わるか</text><rect x="56" y="354" width="912" height="70" fill="#eef2f7"/><text x="532" y="400" font-size="34" font-weight="700" fill="#454545" text-anchor="middle">サンドボックス</text><text x="822" y="400" font-size="34" font-weight="700" fill="#454545" text-anchor="middle">Git の追加</text><text x="64" y="470" font-size="34" font-weight="700" fill="#111111" text-anchor="start">Windows に直接</text><text x="532" y="470" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">非対応</text><text x="822" y="470" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">推奨</text><line x1="56" y1="494" x2="968" y2="494" stroke="#8a8a8a" stroke-width="2"/><text x="64" y="540" font-size="34" font-weight="700" fill="#111111" text-anchor="start">WSL 2</text><text x="532" y="540" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">対応</text><text x="822" y="540" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">不要</text><line x1="56" y1="564" x2="968" y2="564" stroke="#8a8a8a" stroke-width="2"/><text x="64" y="610" font-size="34" font-weight="700" fill="#111111" text-anchor="start">WSL 1</text><text x="532" y="610" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">非対応</text><text x="822" y="610" font-size="34" font-weight="400" fill="#111111" text-anchor="middle">不要</text><line x1="56" y1="634" x2="968" y2="634" stroke="#8a8a8a" stroke-width="2"/><rect x="56" y="658" width="912" height="168" rx="10" fill="#fff1c2" stroke="#4a3200" stroke-width="2"/><text x="76" y="704" font-size="34" font-weight="700" fill="#4a3200" text-anchor="start">条件・制約</text><text x="76" y="758" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">・社内で Claude Code と WSL 2 を使えるかは未確認</text><text x="76" y="804" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">・サンドボックスの制限の範囲は、まだ読んでいない</text><text x="56" y="890" font-size="32" font-weight="400" fill="#454545" text-anchor="start">出典: Anthropic（確認 2026-11-25）</text></svg>
 <pre>【知る｜情報紹介・未再現】Claude Code は Windows で動く。隔離は WSL 2 だけ
 
 要点
@@ -60,12 +60,12 @@ WSL 1: サンドボックス は 非対応、Git for Windows は 不要
 
 条件・制約
 ・社内で Claude Code と WSL 2 を使えるかは未確認
-・サンドボックスが何を制限するかは、まだ読んでいない
+・サンドボックスの制限の範囲は、まだ読んでいない
 
 図の内容（導入の形で、何が変わるか）
-Windows に直接: サンドボックス は 非対応、Git for Windows は 推奨
-WSL 2: サンドボックス は 対応、Git for Windows は 不要
-WSL 1: サンドボックス は 非対応、Git for Windows は 不要
+Windows に直接: サンドボックス は 非対応、Git の追加 は 推奨
+WSL 2: サンドボックス は 対応、Git の追加 は 不要
+WSL 1: サンドボックス は 非対応、Git の追加 は 不要
 
 検証の状況: 情報紹介・未再現 — 提供元の公式の文書を読んだだけ。自分たちは Windows で動かしていない
 確かめていない点: 社内で Claude Code と WSL 2 の利用が許可されているか ／ サンドボックスが制限する範囲（ファイル、通信）。該当する文書を読んでいない ／ 自分たちの Windows PC での動作
@@ -92,7 +92,7 @@ WSL 1: サンドボックス は 非対応、Git for Windows は 不要
 <h2>重要な制約</h2>
 <ul>
 <li>社内で Claude Code と WSL 2 を使えるかは未確認</li>
-<li>サンドボックスが何を制限するかは、まだ読んでいない</li>
+<li>サンドボックスの制限の範囲は、まだ読んでいない</li>
 </ul>
 <h2>要点</h2>
 <ul>
@@ -102,9 +102,9 @@ WSL 1: サンドボックス は 非対応、Git for Windows は 不要
 </ul>
 <h2>導入の形で、何が変わるか</h2>
 <ul>
-<li>Windows に直接: サンドボックス は 非対応、Git for Windows は 推奨</li>
-<li>WSL 2: サンドボックス は 対応、Git for Windows は 不要</li>
-<li>WSL 1: サンドボックス は 非対応、Git for Windows は 不要</li>
+<li>Windows に直接: サンドボックス は 非対応、Git の追加 は 推奨</li>
+<li>WSL 2: サンドボックス は 対応、Git の追加 は 不要</li>
+<li>WSL 1: サンドボックス は 非対応、Git の追加 は 不要</li>
 </ul>
 <p>公式の文書の表によると、OS によるサンドボックスに対応するのは WSL 2 だけで、Windows に直接入れた場合と WSL 1 は対応していない。Git for Windows は、Windows に直接入れる場合に推奨されている（無い場合は PowerShell が使われる）。WSL では不要。</p>
 <h2>概要</h2>
@@ -139,7 +139,7 @@ WSL 1: サンドボックス は 非対応、Git for Windows は 不要
 <li>更新日: 2026-11-25</li>
 <li>訂正: なし</li>
 </ul></div>
-<details><summary>Adaptive Card の JSON の下書き（2267 バイト。上限は 28672。未送信・表示は未確認）</summary>
+<details><summary>Adaptive Card の JSON の下書き（2255 バイト。上限は 28672。未送信・表示は未確認）</summary>
 <pre class="code">{
  &quot;type&quot;: &quot;message&quot;,
  &quot;attachments&quot;: [
@@ -181,7 +181,7 @@ WSL 1: サンドボックス は 非対応、Git for Windows は 不要
      },
      {
       &quot;type&quot;: &quot;TextBlock&quot;,
-      &quot;text&quot;: &quot;- 社内で Claude Code と WSL 2 を使えるかは未確認\n- サンドボックスが何を制限するかは、まだ読んでいない&quot;,
+      &quot;text&quot;: &quot;- 社内で Claude Code と WSL 2 を使えるかは未確認\n- サンドボックスの制限の範囲は、まだ読んでいない&quot;,
       &quot;wrap&quot;: true
      },
      {
@@ -192,7 +192,7 @@ WSL 1: サンドボックス は 非対応、Git for Windows は 不要
      },
      {
       &quot;type&quot;: &quot;TextBlock&quot;,
-      &quot;text&quot;: &quot;- Windows に直接: サンドボックス は 非対応、Git for Windows は 推奨\n- WSL 2: サンドボックス は 対応、Git for Windows は 不要\n- WSL 1: サンドボックス は 非対応、Git for Windows は 不要&quot;,
+      &quot;text&quot;: &quot;- Windows に直接: サンドボックス は 非対応、Git の追加 は 推奨\n- WSL 2: サンドボックス は 対応、Git の追加 は 不要\n- WSL 1: サンドボックス は 非対応、Git の追加 は 不要&quot;,
       &quot;wrap&quot;: true
      },
      {

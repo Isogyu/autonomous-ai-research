@@ -39,7 +39,7 @@
      },
      {
       "type": "TextBlock",
-      "text": "- 確かめたのは Linux の CI だけ。Windows は未確認\n- 手順のコードは未マージ（PR #12）",
+      "text": "- 確認は Linux だけ。Windows は未確認\n- 手順のコードは未マージ（PR #12）",
       "wrap": true
      },
      {

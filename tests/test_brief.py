@@ -60,7 +60,7 @@ def test_samples_keep_takeaways_sources_status_and_constraints_through_every_out
         assert status in out and purpose in out                       # 目的と検証の状況は、どの出力にもある
     for c in b.constraints:                                           # 制約は、カードの本体・本文・詳細・Adaptive Card のすべてに
         assert c in text and c in detail and c in card
-        assert c in re.sub(r"<[^>]+>", "", svg).replace("&amp;", "&") or all(part in svg for part in render.wrap("・" + c, 51))
+        assert all(part in svg for part in render.wrap("・" + c, render._units(render.CARD_W - 2 * render.PAD - 40, 34)))
     for t in b.takeaways:
         assert t in text and t in detail and t in card
     for s in b.sources:                                               # 出典、確認日、対象の版
@@ -177,6 +177,12 @@ def test_card_keeps_minimum_text_size_contrast_and_a_text_alternative(brief_id):
     svg = render.card_svg(b)
     sizes = [int(x) for x in re.findall(r'font-size="(\d+)"', svg)]
     assert min(sizes) >= render.MIN_FONT
+    # どの文字も、見積もりの幅でカードの中に収まる（英字の多い見出しや列の名前が、右にはみ出さない）
+    for m in re.finditer(r'<text x="(\d+)" y="\d+" font-size="(\d+)" font-weight="\d+" fill="[^"]+" text-anchor="(\w+)">([^<]*)</text>', svg):
+        x, size, anchor, text = int(m.group(1)), int(m.group(2)), m.group(3), m.group(4).replace("&amp;", "&")
+        w = render.vis(text) * size / 2
+        left, right = (x - w / 2, x + w / 2) if anchor == "middle" else (x, x + w)
+        assert left >= 0 and right <= render.CARD_W - 20, (text, left, right)
     h = float(re.search(r'viewBox="0 0 1024 (\d+)"', svg).group(1))
     assert h <= render.CARD_MAX_H
     # 条件・制約の文字は、図の中の文字より小さくない（注記に追いやらない）
