@@ -390,3 +390,76 @@ def test_cli_lists_validates_and_previews_the_samples(tmp_path, monkeypatch):
     names = {c.name for c in cli.brief_app.registered_commands}
     assert not names & {"send", "post", "publish", "schedule"}                                  # 送信と定期配信の入口はない
     assert copy.deepcopy(Brief.model_json_schema())["properties"]["verification"]
+
+
+# ---------------------------------------------------------------------- PNG への変換
+
+def _png(width: int, height: int, ink: bool) -> bytes:
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+
+    rows = b""
+    for y in range(height):
+        px = b"".join((b"\x11\x11\x11" if ink and (x // 8 + y // 8) % 2 else b"\xff\xff\xff") for x in range(width))
+        rows += b"\x00" + px
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+
+
+def test_png_reader_measures_size_and_detects_a_blank_image():
+    from aar.brief import png
+
+    blank, drawn = png.read_png(_png(64, 48, ink=False)), png.read_png(_png(64, 48, ink=True))
+    assert (blank["width"], blank["height"], blank["ink_ratio"]) == (64, 48, 0.0)
+    assert drawn["ink_ratio"] > 0.3
+    with pytest.raises(png.PngError, match="PNG ではない"):
+        png.read_png(b"<svg/>")
+    assert png.svg_size('<svg xmlns="x" viewBox="0 0 1024 932" width="1024" height="932">') == (1024, 932)
+
+
+def test_png_export_fails_closed_without_a_browser_or_when_the_card_is_too_large(tmp_path, monkeypatch):
+    from aar.brief import png
+
+    svg = render.card_svg(store.read(SAMPLES, "claude-code-windows-sandbox"))
+    out = tmp_path / "card.png"
+    out.write_bytes(b"old")
+    with pytest.raises(png.PngError, match="見つからない"):
+        png.svg_to_png(svg, out, browser=str(tmp_path / "no-such-browser"))
+    assert out.read_bytes() == b"old"                                       # ブラウザーを探す段階の失敗では、何も変えない
+    monkeypatch.setenv("AAR_BROWSER_BIN", str(tmp_path / "also-missing"))
+    with pytest.raises(png.PngError, match="見つからない"):                  # 指定があるときは、ほかのブラウザーを勝手に探さない
+        png.find_browser()
+    monkeypatch.delenv("AAR_BROWSER_BIN")
+    monkeypatch.setattr(png, "find_browser", lambda override="": "browser")
+    with pytest.raises(png.PngError, match="上限"):
+        png.svg_to_png('<svg width="2048" height="900"></svg>', out)
+    # ブラウザーが白紙の画像を返したら、失敗にして、古い画像も残さない（古い内容を、新しい画像だと思って貼らないため）
+    def fake_run(cmd, **kw):
+        shot = next(a.split("=", 1)[1] for a in cmd if a.startswith("--screenshot="))
+        Path(shot).write_bytes(_png(1024, png.svg_size(svg)[1], ink=False))
+        return type("R", (), {"returncode": 0, "stderr": b"", "stdout": b""})()
+    monkeypatch.setattr(png.subprocess, "run", fake_run)
+    with pytest.raises(png.PngError, match="何も描かれていない"):
+        png.svg_to_png(svg, out)
+    assert not out.exists()
+
+
+def test_png_export_with_an_installed_browser_matches_the_card_and_teams_limits(tmp_path):
+    """実物のブラウザーでの変換。ブラウザーがない環境では skip（skip は、その環境での合格ではない）。
+
+    確かめるのは、大きさ・上限・白紙でないことまで。文字が正しく読めるか（日本語のフォントがあるか）は、画像を人が見て確かめる。
+    """
+    from aar.brief import png
+
+    try:
+        png.find_browser()
+    except png.PngError:
+        pytest.skip("ヘッドレスで使えるブラウザーがない")
+    for brief_id in SAMPLE_IDS:
+        svg = render.card_svg(store.read(SAMPLES, brief_id))
+        info = png.svg_to_png(svg, tmp_path / "出力 先" / f"{brief_id}.png")
+        assert (info["width"], info["height"]) == png.svg_size(svg) and info["height"] <= png.TEAMS_IMAGE_MAX_PX
+        assert info["bytes"] < png.TEAMS_IMAGE_MAX_BYTES and info["ink_ratio"] >= png.MIN_INK_RATIO
+        assert Path(info["path"]).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" and info["browser_version"]

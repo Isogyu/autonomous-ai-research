@@ -402,6 +402,27 @@ def brief_preview(brief_id: Annotated[str, typer.Argument(help="省略すると�
         typer.echo(str(_brief(store.write_preview, root, b) / "preview.html"))
 
 
+@brief_app.command("export-png")
+def brief_export_png(brief_id: Annotated[str, typer.Argument(help="省略すると、すべての候補")] = "",
+                     browser: Annotated[str, typer.Option(help="ブラウザーの実行ファイル（省略すると Edge、Chrome、Chromium を探す。AAR_BROWSER_BIN でも指定できる）")] = "") -> None:
+    """図解カードを PNG にする（briefs/<id>/preview/card.png）。Teams のカードの画像は SVG に対応しないため。送信はしない。"""
+    from aar.brief import png, render, store
+
+    root = _brief_root()
+    failed = False
+    for bid in ([brief_id] if brief_id else store.list_ids(root)):
+        b = _brief(store.read, root, bid)
+        try:
+            info = png.svg_to_png(_brief(render.card_svg, b), root / bid / "preview" / "card.png", browser=browser)
+            typer.echo(f"{bid}: {info['width']}×{info['height']}、{info['bytes']} バイト、{info['browser_version'] or info['browser']} → {info['path']}")
+        except png.PngError as e:
+            failed = True
+            typer.echo(f"{bid}: できない: {e}", err=True)
+    typer.echo("文字の形は、この PC のフォントで決まる。Teams に貼る前に、画像を開いて、文字が正しく読めることを確かめる")
+    if failed:
+        raise typer.Exit(1)
+
+
 @brief_app.command("show")
 def brief_show(brief_id: str) -> None:
     """状態の記録、訂正の関係、感想。"""

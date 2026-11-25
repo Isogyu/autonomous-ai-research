@@ -33,6 +33,7 @@
 aar brief list                         # 投稿候補と状態
 aar brief validate <id>                # 入力の検証と、送る前の機械的な確認
 aar brief preview [<id>]               # briefs/<id>/preview/ に、カード・本文・詳細ページ・プレビュー（HTML）を作る。送信はしない
+aar brief export-png [<id>]            # 図解カードを PNG にする（PC のブラウザーのヘッドレスの機能を使う。送信はしない）
 aar brief submit <id> --actor claude_code:<セッション>      # レビュー待ちにする
 aar brief approve <id> --actor human:<名前> --confirm-shareable [--confirm-no-copied-text]   # 人だけ。送信はされない
 aar brief hold | reject | archive | reopen <id> --actor … --reason …
@@ -46,7 +47,7 @@ aar brief show <id>                    # 記録、訂正の関係、感想
 新しい候補は、`briefs/<id>/brief.yaml` を書いて作る（既存のサンプルを写すのが早い）。値に「空白＋#」が入るときは、引用符で囲む。
 `briefs/<id>/sources/*.txt` に出典の文章を置くと、まとまった長さの転載がないかを照合する（このフォルダーは Git に入れない）。
 
-**OS への依存**: この機能は Python の標準の機能と、既に入っているライブラリだけで動く。コンテナ、DB、Temporal、WSL は使わない。
+**OS への依存**: この機能は Python の標準の機能と、既に入っているライブラリだけで動く。コンテナ、DB、Temporal、WSL は使わない（PNG への変換だけ、PC に入っているブラウザーを使う）。
 ファイルは UTF-8・LF で書く。**Windows では、まだ動かしていない**（`main` の CI は Linux だけ。Windows の経路は、未マージの PR #12 にある。
 PR #12 のあとは、このテストも Windows の経路で動く）。確かめたのは、macOS と、CI の Linux。
 Podman への置き換えや、候補のコードの隔離とは、関係しない（この機能は、外部から取得した内容を実行しない）。
