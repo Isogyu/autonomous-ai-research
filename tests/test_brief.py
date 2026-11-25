@@ -446,7 +446,7 @@ def test_png_export_fails_closed_without_a_browser_or_when_the_card_is_too_large
     assert not out.exists()
 
 
-def test_png_export_with_an_installed_browser_matches_the_card_and_teams_limits(tmp_path):
+def test_png_export_with_an_installed_browser_matches_the_card_and_teams_limits(tmp_path, monkeypatch):
     """実物のブラウザーでの変換。ブラウザーがない環境では skip（skip は、その環境での合格ではない）。
 
     確かめるのは、大きさ・上限・白紙でないことまで。文字が正しく読めるか（日本語のフォントがあるか）は、画像を人が見て確かめる。
@@ -457,6 +457,12 @@ def test_png_export_with_an_installed_browser_matches_the_card_and_teams_limits(
         png.find_browser()
     except png.PngError:
         pytest.skip("ヘッドレスで使えるブラウザーがない")
+    import os
+    import sys
+    if sys.platform == "linux" and os.environ.get("GITHUB_ACTIONS"):
+        # GitHub の Linux の実行環境では、Chrome 自身のサンドボックスが起動できず、異常終了する。ここでだけ、明示して外す
+        # （開くのは、このテストが作った手元の 1 ファイル）。既定の動作では外さない
+        monkeypatch.setenv("AAR_BROWSER_ARGS", "--no-sandbox")
     for brief_id in SAMPLE_IDS:
         svg = render.card_svg(store.read(SAMPLES, brief_id))
         info = png.svg_to_png(svg, tmp_path / "出力 先" / f"{brief_id}.png")

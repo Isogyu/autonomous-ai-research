@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shlex
 import shutil
 import struct
 import subprocess
@@ -121,7 +122,10 @@ def svg_to_png(svg: str, out: Path, *, browser: str = "", timeout_s: int = 90) -
         page.write_text('<!doctype html><meta charset="utf-8"><style>html,body{margin:0;background:#fff;overflow:hidden}svg{display:block}</style>'
                         + svg, encoding="utf-8", newline="\n")
         shot = tmp / "card.png"
-        cmd = [exe, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-extensions",
+        # 追加の引数（AAR_BROWSER_ARGS）。既定では何も足さない。ブラウザー自身のサンドボックスを外す引数（--no-sandbox）は、
+        # それが要る環境（一部の Linux の CI）で、人が明示したときだけ使う
+        extra = shlex.split(os.environ.get("AAR_BROWSER_ARGS", ""))
+        cmd = [exe, *extra, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-extensions",
                "--hide-scrollbars", "--force-device-scale-factor=1", f"--window-size={w},{h}", f"--user-data-dir={tmp / 'profile'}",
                f"--screenshot={shot}", page.as_uri()]
         try:
@@ -130,7 +134,7 @@ def svg_to_png(svg: str, out: Path, *, browser: str = "", timeout_s: int = 90) -
             raise PngError(f"ブラウザーが {timeout_s} 秒で終わらなかった（{exe}）") from None
         if not shot.exists():
             raise PngError(f"ブラウザーが画像を作らなかった（終了コード {r.returncode}。ヘッドレスの実行が、社内の設定で止められていないかを確かめる）: "
-                           + r.stderr.decode("utf-8", "replace").strip()[-300:])
+                           + " / ".join(r.stderr.decode("utf-8", "replace").strip().splitlines()[-6:])[-900:])
         data = shot.read_bytes()
     info = read_png(data)
     problems = []
@@ -146,6 +150,6 @@ def svg_to_png(svg: str, out: Path, *, browser: str = "", timeout_s: int = 90) -
     out.write_bytes(data)
     v = subprocess.run([exe, "--version"], capture_output=True, timeout=30, check=False, stdin=subprocess.DEVNULL)
     return {"path": str(out), "width": w, "height": h, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
-            "ink_ratio": round(info["ink_ratio"], 4), "browser": Path(exe).name,
+            "ink_ratio": round(info["ink_ratio"], 4), "browser": Path(exe).name, "extra_args": extra,
             "browser_version": v.stdout.decode("utf-8", "replace").strip()[:80],
             "note": "文字の形は、この PC のフォントによる。文字が正しく読めるかは、画像を見て確かめる"}
