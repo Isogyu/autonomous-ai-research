@@ -315,6 +315,8 @@ def test_cycle_stops_instead_of_weakening_isolation_or_generating_unisolated(aut
         out = asyncio.run(auto.run_cycle(conn, actor, script, with_papers=False))
         assert any("基準値を測れない" in s and "isolation_unavailable" in s for s in out["stopped"]) and out["decided"] == []
         assert not [c for c in script.calls if c.startswith("generate")]
-        runs = fetch_all(conn, "SELECT isolation, status, failure_kind FROM improvement_runs")
+        plan_ids = list(out["plans"].values())
+        runs = fetch_all(conn, "SELECT isolation, status, failure_kind FROM improvement_runs WHERE plan_id = ANY(%s)", (plan_ids,))
+        # 隔離を求める計画のもとでは、別プロセスでの実行が 1 件もない（切り替えていない）
         assert runs and all(r["isolation"] == "podman" and r["status"] == "failed" and r["failure_kind"] == "isolation_unavailable" for r in runs)
     config.get_settings.cache_clear()
