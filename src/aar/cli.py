@@ -497,13 +497,13 @@ def improve_scan(propose: Annotated[bool, typer.Option(help="見つけた弱点�
 
 
 @improve_app.command("plan")
-def improve_plan(actor: ActorOpt = None) -> None:
+def improve_plan(actor: ActorOpt = None, target: Annotated[str, typer.Option(help="対象（aar.improve.targets）")] = "fix_context") -> None:
     """評価計画と課題を固定し、現行方式の基準値を測る。候補を作る前に実行する。"""
     from aar.improve import ledger, loop
 
     who = ledger.parse_actor(actor)
     with connect() as conn:
-        plan = loop.freeze_plan(conn, who)
+        plan = loop.freeze_plan(conn, who, target=target)
         runs = loop.run_baseline(conn, plan["id"], who)
     _print({"plan_id": plan["id"], "plan_sha256": plan["plan_sha256"], "created": plan["created"], "splits": plan["plan"]["splits"],
             "cases": plan["plan"]["cases"],
@@ -521,6 +521,41 @@ def improve_generate(candidate_id: str, plan_id: int, actor: ActorOpt = None,
     with connect() as conn:
         _print(asyncio.run(loop.generate(conn, candidate_id, plan_id, who, runners_for(get_settings().mode)[choice.agent],
                                          model=model or choice.model)))
+
+
+@improve_app.command("cycle")
+def improve_cycle(actor: ActorOpt = None, papers: Annotated[bool, typer.Option(help="論文から仮説を拾う工程も行う")] = True,
+                  model: Annotated[str, typer.Option(help="実行担当のモデル（空なら方針の implementer）")] = "") -> None:
+    """改善の 1 巡を、続きから進める（論文と記録から候補 → 生成 → 評価 → 採否）。採用候補を出すところまでで、基盤には反映しない。"""
+    from aar.improve import auto, ledger
+    from aar.temporal.activities import runners_for
+
+    who, choice = ledger.parse_actor(actor), load_policy().research.models["implementer"]
+    with connect() as conn:
+        _print(asyncio.run(auto.run_cycle(conn, who, runners_for(get_settings().mode)[choice.agent], model=model or choice.model,
+                                          with_papers=papers)))
+
+
+@improve_app.command("papers")
+def improve_papers(actor: ActorOpt = None, limit: Annotated[int, typer.Option(help="読む論文の数の上限")] = 3,
+                   model: Annotated[str, typer.Option(help="実行担当のモデル（空なら方針の implementer）")] = "") -> None:
+    """収集済みの論文から、改善の仮説を拾って候補として登録する（1 件につき、実行担当の呼び出しが 1 回）。評価はしない。"""
+    from aar.improve import auto, ledger
+    from aar.temporal.activities import runners_for
+
+    who, choice = ledger.parse_actor(actor), load_policy().research.models["implementer"]
+    with connect() as conn:
+        _print(asyncio.run(auto.ideas_from_papers(conn, who, runners_for(get_settings().mode)[choice.agent], model=model or choice.model,
+                                                  limit=limit)))
+
+
+@improve_app.command("backlog")
+def improve_backlog() -> None:
+    """評価器がないために試せなかった仮説を、領域ごとに数える（どの評価器を作ると、試せる仮説が増えるかの手がかり）。"""
+    from aar.improve import auto
+
+    with connect() as conn:
+        _print(auto.evaluator_backlog(conn))
 
 
 @improve_app.command("register")

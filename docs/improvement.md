@@ -15,6 +15,44 @@
 > 候補を作る側の隔離は未完成のままで、既定では生成を拒否する（`AAR_IMPROVE_ALLOW_UNISOLATED_GENERATOR`）。
 > 下の本文と、`docs/improvement/2026-11-25-first-cycle.json` は、当時（macOS、sandbox-exec）の記録として残す。
 
+## 0. 自動の 1 巡と、論文からの仮説（2026-11-26 追記。設計は [ADR-0014](adr/0014-improvement-auto-loop.md)）
+
+**実物の 1 巡は、まだ一度も動かしていない。** 台本の実行担当でのテストだけ。
+
+```
+aar improve cycle --actor <主体>       # 1 巡を、続きから進める（論文と記録から候補 → 生成 → 評価 → 採否）。基盤には反映しない
+aar improve cycle --no-papers --actor <主体>   # 論文を読む工程（実行担当の呼び出し）を省く
+aar improve papers --actor <主体>      # 収集済みの論文から、仮説を拾って候補にするだけ（評価はしない）
+aar improve backlog                    # 評価器がないために試せなかった仮説を、領域ごとに数える
+aar improve plan --target log_excerpt --actor <主体>   # 対象を選んで、評価計画を固定する
+```
+
+既定の設定では、1 巡は途中で止まる（止まるのが正しい動作）。最後まで回すための条件:
+
+| 条件 | 設定・操作 | だれが |
+|---|---|---|
+| 評価の隔離 | `aar podman verify` に通す。`AAR_IMPROVE_IMAGE` にダイジェストつきのイメージ | 人（環境ごと） |
+| 候補の生成 | `AAR_IMPROVE_ALLOW_UNISOLATED_GENERATOR=1`（候補を作る側の隔離は未完成。認めた事実は記録される） | 人 |
+| 定期の実行 | `AAR_IMPROVE_AUTO=1`（週 1 回。既定は無効） | 人 |
+| 上限 | `AAR_IMPROVE_MAX_GENERATIONS_PER_CYCLE`（既定 1）、`AAR_IMPROVE_MAX_PAPERS_PER_CYCLE`（既定 3） | 人 |
+
+条件を満たしても、いまは採用候補は出ない（実物の標本が足りない）。出るのは、棄却と保留の記録まで。
+
+### 対象を増やす（評価器を足す）手順
+
+評価器は人が書いてレビューする（自動では作らない）。`aar improve backlog` が、どの領域の評価器が求められているかの手がかりになる。
+
+1. 改善したい処理を、**モデルを呼ばず、標準ライブラリだけを使う、1 つの関数**として 1 つのファイルに出す（動作は変えない）。保護領域の外に置く。
+2. `aar.improve.targets.TARGETS` に対象を足す（ファイル、関数名、変更してよいファイル）。
+3. `src/aar/improve/spec_<対象>.py` に、課題（実物の記録から・合成）、採点、評価計画の値、採点の説明を書く。
+   採点の結果は、共通の項目（`ran` と各 guard、`n_refs`・`resolved`・`ref_resolution`、`precision`、`chars`、`ms`）で返す。
+   **正解を機械的に決められない課題は作らない。** guard には、証拠の保全（無い内容を作らない、既存の情報を落とさない）を必ず入れる。
+4. `evalkit.spec_for` に登録し、`EVALUATOR_FILES` にそのファイルを足す（評価器のハッシュに含める）。
+5. `auto.TARGET_TOPICS` に、論文を選ぶ語と、対象の説明を足す。
+6. テスト: 現行方式が自分の guard を通ること、良い例が基準を満たすこと、無い内容を作る例・情報を落とす例・長くする例が棄却されること。
+
+例は `src/aar/improve/spec_log_excerpt.py`（失敗したときのログの抜粋）。
+
 ## 1. 既存の実装との対応（2026-11-25、`main` の `3a7ef51` を読んで確かめた）
 
 | 領域 | 既存の機能 | 不足 | 再利用する | 今回足す | 見送る |

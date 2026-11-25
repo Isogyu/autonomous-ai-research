@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -122,6 +123,19 @@ async def test_candidate_sees_only_its_own_inputs(env, monkeypatch):
     assert base["isolation_detail"]["fingerprint"] == r["isolation_detail"]["fingerprint"]
     assert base["isolation_detail"]["image_id"] == r["isolation_detail"]["image_id"]
     assert container.managed_containers(env.engine) == []
+
+
+async def test_second_target_is_evaluated_under_the_same_container_isolation(env):
+    """2 つ目の対象（ログの抜粋）も、同じ隔離のコンテナで評価できる（入力は標準入力だけ）。"""
+    from aar.improve.targets import TARGETS
+
+    await _verified(env, env.ek.PODMAN_LIMITS)
+    target, spec = TARGETS["log_excerpt"], env.ek.spec_for("log_excerpt")
+    source = (Path(__file__).parents[1] / target.module_path).read_text(encoding="utf-8")
+    cases = spec.synthetic_cases("t", spec.plan["budget_chars"], 7)
+    r = env.ek.evaluate(source, target, cases, isolation="podman", deny_read=[])
+    assert r["status"] == "completed" and r["isolation"] == "podman" and r["metrics"]["guard_failures"] == {}, r
+    assert 0 < r["metrics"]["ref_resolution_micro"] < 1 and container.managed_containers(env.engine) == []
 
 
 async def test_runaway_candidate_is_stopped_and_leaves_no_container(env):

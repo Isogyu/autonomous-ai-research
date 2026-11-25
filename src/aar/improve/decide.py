@@ -42,6 +42,39 @@ def _check(name: str, passed: bool, detail: str) -> dict[str, Any]:
     return {"name": name, "passed": bool(passed), "detail": detail}
 
 
+def _split_violation(plan: dict[str, Any], runs: dict[str, dict[str, Any]], split: str, checks: list[dict[str, Any]]) -> str:
+    """1 つの分割での、候補の違反（動かない、形式や証拠の保全、参照していない項目、課題ごとの後退、長さ）。なければ空の文字列。"""
+    cand = runs[f"candidate:{split}"]
+    ok = cand["status"] == "completed"
+    checks.append(_check(f"候補の実行が完了している（{split}）", ok, cand.get("failure_kind") or "完了"))
+    if not ok:
+        return f"候補が {split} の課題で実行できなかった（{cand.get('failure_kind')}）"
+    fails = {g: ids for g, ids in cand["metrics"].get("guard_failures", {}).items() if g in plan["guards"]}
+    checks.append(_check(f"出力の形式と証拠の保全（{split}）", not fails,
+                         "; ".join(f"{g}: {len(ids)} 件（{ids[0]} など）" for g, ids in fails.items()) or "違反なし"))
+    if fails:
+        return f"{split} の課題で、形式または証拠の保全に違反した: " + "、".join(fails)
+    prec = cand["metrics"].get("min_precision")
+    okp = prec is None or prec >= plan["min_precision"]
+    checks.append(_check(f"参照されていない項目を入れすぎていない（{split}）", okp, f"最小 {prec}（基準 {plan['min_precision']} 以上）"))
+    if not okp:
+        return f"{split} の課題で、指摘が参照していない主張・証拠を多く入れている"
+    base_by = {s["id"]: s for s in runs[f"baseline:{split}"]["per_case"]}
+    worse = [s["id"] for s in cand["per_case"]
+             if s["ref_resolution"] is not None and base_by.get(s["id"], {}).get("ref_resolution") is not None
+             and s["ref_resolution"] < base_by[s["id"]]["ref_resolution"]]
+    checks.append(_check(f"どの課題でも現行方式を下回らない（{split}）", not worse, "、".join(worse[:5]) or "後退なし"))
+    if worse and plan["no_case_regression"]:
+        return f"{split} の課題に、現行方式より悪くなったものがある"
+    ratio = (cand["metrics"]["mean_chars"] / runs[f"baseline:{split}"]["metrics"]["mean_chars"]
+             if runs[f"baseline:{split}"]["metrics"]["mean_chars"] else 0.0)
+    okr = ratio <= plan["max_mean_chars_ratio"]
+    checks.append(_check(f"文脈の長さの増え方が許容の範囲（{split}）", okr, f"現行方式の {ratio:.2f} 倍（上限 {plan['max_mean_chars_ratio']}）"))
+    if not okr:
+        return f"{split} の課題で、文脈が長くなりすぎる"
+    return ""
+
+
 def decide(plan: dict[str, Any], runs: dict[str, dict[str, Any]], *, sealed_evaluations: int, patch_problems: list[str],
            evaluator_matches: bool) -> dict[str, Any]:
     """採否を決める。runs は {"baseline:select", "candidate:select", "baseline:sealed", "candidate:sealed"} → 実行の記録。"""
@@ -60,6 +93,17 @@ def decide(plan: dict[str, Any], runs: dict[str, dict[str, Any]], *, sealed_eval
         reasons.append("評価器が変わっているので、基準値と比べられない（評価器の変更は、候補とは別の変更として扱う）")
         return out("on_hold")
 
+    # --- 候補選択用の課題だけで分かる違反は、封印評価を見ずに棄却する（封印評価を見る回数を、通る見込みのある候補に限る）
+    select_checked = False
+    if "baseline:select" in runs and "candidate:select" in runs:
+        iso = [k for k in ("baseline:select", "candidate:select") if runs[k]["isolation"] != plan["required_isolation"]]
+        if not iso and runs["baseline:select"]["status"] == "completed":
+            select_checked = True
+            reason = _split_violation(plan, runs, "select", checks)
+            if reason:
+                reasons.append(reason)
+                return out("rejected")
+
     missing = [k for k in ("baseline:select", "candidate:select", "baseline:sealed", "candidate:sealed") if k not in runs]
     if missing:
         checks.append(_check("必要な実行がそろっている", False, "不足: " + "、".join(missing)))
@@ -77,39 +121,10 @@ def decide(plan: dict[str, Any], runs: dict[str, dict[str, Any]], *, sealed_eval
         return out("on_hold")
 
     # --- 候補が動かない、出力の形式や証拠の保全に違反する → 棄却（主指標では相殺しない）
-    for split in ("select", "sealed"):
-        cand = runs[f"candidate:{split}"]
-        ok = cand["status"] == "completed"
-        checks.append(_check(f"候補の実行が完了している（{split}）", ok, cand.get("failure_kind") or "完了"))
-        if not ok:
-            reasons.append(f"候補が {split} の課題で実行できなかった（{cand.get('failure_kind')}）")
-            return out("rejected")
-        fails = {g: ids for g, ids in cand["metrics"].get("guard_failures", {}).items() if g in plan["guards"]}
-        checks.append(_check(f"出力の形式と証拠の保全（{split}）", not fails,
-                             "; ".join(f"{g}: {len(ids)} 件（{ids[0]} など）" for g, ids in fails.items()) or "違反なし"))
-        if fails:
-            reasons.append(f"{split} の課題で、形式または証拠の保全に違反した: " + "、".join(fails))
-            return out("rejected")
-        prec = cand["metrics"].get("min_precision")
-        okp = prec is None or prec >= plan["min_precision"]
-        checks.append(_check(f"参照されていない項目を入れすぎていない（{split}）", okp, f"最小 {prec}（基準 {plan['min_precision']} 以上）"))
-        if not okp:
-            reasons.append(f"{split} の課題で、指摘が参照していない主張・証拠を多く入れている")
-            return out("rejected")
-        base_by = {s["id"]: s for s in runs[f"baseline:{split}"]["per_case"]}
-        worse = [s["id"] for s in cand["per_case"]
-                 if s["ref_resolution"] is not None and base_by.get(s["id"], {}).get("ref_resolution") is not None
-                 and s["ref_resolution"] < base_by[s["id"]]["ref_resolution"]]
-        checks.append(_check(f"どの課題でも現行方式を下回らない（{split}）", not worse, "、".join(worse[:5]) or "後退なし"))
-        if worse and plan["no_case_regression"]:
-            reasons.append(f"{split} の課題に、現行方式より悪くなったものがある")
-            return out("rejected")
-        ratio = (cand["metrics"]["mean_chars"] / runs[f"baseline:{split}"]["metrics"]["mean_chars"]
-                 if runs[f"baseline:{split}"]["metrics"]["mean_chars"] else 0.0)
-        okr = ratio <= plan["max_mean_chars_ratio"]
-        checks.append(_check(f"文脈の長さの増え方が許容の範囲（{split}）", okr, f"現行方式の {ratio:.2f} 倍（上限 {plan['max_mean_chars_ratio']}）"))
-        if not okr:
-            reasons.append(f"{split} の課題で、文脈が長くなりすぎる")
+    for split in (("sealed",) if select_checked else ("select", "sealed")):
+        reason = _split_violation(plan, runs, split, checks)
+        if reason:
+            reasons.append(reason)
             return out("rejected")
 
     # --- 主指標（封印評価）

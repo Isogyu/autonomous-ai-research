@@ -43,7 +43,7 @@
 | 研究エンジン | 内蔵（事前登録つきの仮説検証） | AI Scientist v3 はアダプターのみで未接続（[ADR-0003](docs/adr/0003-research-engine.md)） |
 | 研究記憶 | PostgreSQL 17 + pgvector | Podman のコンテナで動かす（Compose は使わない）。公開は `127.0.0.1` だけ |
 | 実験の隔離 | Podman のコンテナ | ネットワークなし、読み取り専用、資源の上限。**効いていることを検証した構成でだけ実行する**（[ADR-0006](docs/adr/0006-security.md)、[ADR-0012](docs/adr/0012-windows-podman.md)） |
-| 基盤の改善候補 | 台帳と、隔離した比較評価 | 稼働中の基盤には自動で反映しない（[docs/improvement.md](docs/improvement.md)） |
+| 基盤の改善 | 論文と実行の記録から候補を作り、隔離した比較評価で採否を決める 1 巡（`aar improve cycle`） | 採用候補を出すところまで。基盤には自動で反映しない。既定の設定では途中で止まる（[docs/improvement.md](docs/improvement.md)、[ADR-0014](docs/adr/0014-improvement-auto-loop.md)） |
 | 社内向けの発信 | 投稿候補、図解カード、プレビュー | **送信はしない**（[docs/briefs/README.md](docs/briefs/README.md)） |
 | UI | FastAPI（サーバー側で描画）と CLI | `http://127.0.0.1:8765` |
 

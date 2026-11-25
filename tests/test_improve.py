@@ -504,3 +504,23 @@ def test_application_role_cannot_rewrite_or_unprotect_the_ledger(db_url):
     with psycopg.connect(db_url, autocommit=True) as conn:                     # 所有者でも、UPDATE と DELETE はトリガーが拒否する
         with pytest.raises(psycopg.Error):
             conn.execute("UPDATE improvement_events SET event = 'x'")
+
+
+def test_select_failure_rejects_without_looking_at_the_sealed_evaluation():
+    """候補選択用の課題で基準を外れた候補は、封印評価を実行しなくても棄却できる。通った候補は、封印評価が済むまで保留。"""
+    select = _cases("select")
+    args = {"sealed_evaluations": 0, "patch_problems": [], "evaluator_matches": True}
+    only_select = lambda src: {"baseline:select": _eval(BASELINE, select), "candidate:select": _eval(src, select)}  # noqa: E731
+    for bad in (DROPS, DUMPS, RANDOM, CRASHES):
+        d = dec.decide(_plan(), only_select(bad), **args)
+        assert d["verdict"] == "rejected" and not any("sealed" in c["name"] for c in d["checks"]), d["reasons"]
+    passed = dec.decide(_plan(), only_select(GOOD), **args)
+    assert passed["verdict"] == "on_hold" and passed["reasons"] == ["評価が終わっていない"]
+    assert all(c["passed"] for c in passed["checks"] if "select" in c["name"])
+    # 隔離が計画より弱い実行では、候補選択用だけで棄却もしない（採否を決めない）
+    weak = dec.decide(_plan(required_isolation="podman"), only_select(DROPS), **args)
+    assert weak["verdict"] == "on_hold"
+    # 4 つの実行がそろっているときの結論は、これまでと変わらない
+    assert _decide(GOOD)["verdict"] == "adopt_candidate" and _decide(DROPS)["verdict"] == "rejected"
+    names = [c["name"] for c in _decide(GOOD)["checks"]]
+    assert len(names) == len(set(names))                                               # 同じ確認を 2 回数えていない

@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     improve_image: str = ""
     # 改善候補を作る側（実行担当の CLI）は、まだ OS による隔離の中で動かせない。人がこれを設定したときだけ生成する
     improve_allow_unisolated_generator: bool = False
+    # 改善の 1 巡を、定期の実行に載せるか。既定は無効（人が `aar improve cycle` で動かす）
+    improve_auto: bool = False
+    improve_max_generations_per_cycle: int = 1      # 1 巡で、実行担当に作らせる候補の数の上限
+    improve_max_papers_per_cycle: int = 3           # 1 巡で、仮説を拾うために読む論文の数の上限（1 件につき、実行担当の呼び出しが 1 回）
     # 基盤のサービス（PostgreSQL）のコンテナ。公開は 127.0.0.1 だけ
     postgres_image: str = "docker.io/pgvector/pgvector:0.8.7-pg17"
     postgres_container: str = "aar-postgres"
