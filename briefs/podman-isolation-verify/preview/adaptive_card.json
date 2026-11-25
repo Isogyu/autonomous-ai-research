@@ -1,0 +1,84 @@
+{
+ "type": "message",
+ "attachments": [
+  {
+   "contentType": "application/vnd.microsoft.card.adaptive",
+   "contentUrl": null,
+   "content": {
+    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+    "type": "AdaptiveCard",
+    "version": "1.5",
+    "msteams": {
+     "width": "Full"
+    },
+    "body": [
+     {
+      "type": "TextBlock",
+      "text": "試す｜自環境で検証済み",
+      "wrap": true,
+      "weight": "Bolder",
+      "isSubtle": true
+     },
+     {
+      "type": "TextBlock",
+      "text": "コンテナの隔離が効いているか、中から確かめる",
+      "wrap": true,
+      "size": "Large",
+      "weight": "Bolder"
+     },
+     {
+      "type": "TextBlock",
+      "text": "- 制限は、指定しただけでは効いたか分からない\n- コンテナの中から、通信・書き込み・上限を確かめる\n- 確かめていない構成では、実行しない作りにした",
+      "wrap": true
+     },
+     {
+      "type": "TextBlock",
+      "text": "条件・制約",
+      "wrap": true,
+      "weight": "Bolder"
+     },
+     {
+      "type": "TextBlock",
+      "text": "- 確かめたのは Linux の CI だけ。Windows は未確認\n- 手順のコードは未マージ（PR #12）",
+      "wrap": true
+     },
+     {
+      "type": "TextBlock",
+      "text": "図の内容（隔離を、どう確かめるか）",
+      "wrap": true,
+      "weight": "Bolder"
+     },
+     {
+      "type": "TextBlock",
+      "text": "- 1. イメージを取得して固定する\n- 2. 制限を指定して起動する\n- 3. 中から制限を確かめる（通信・書き込み・上限・権限）\n- 4. 通らなければ実行しない",
+      "wrap": true
+     },
+     {
+      "type": "TextBlock",
+      "text": "検証の状況: 自環境で検証済み — このリポジトリの CI（Linux）で、コンテナの中から制限を確かめるテストを動かして通った。Windows では動かしていない",
+      "wrap": true
+     },
+     {
+      "type": "TextBlock",
+      "text": "確かめていない点: Windows 上の Podman の仮想環境で、同じ確認が通るか ／ クライアントとは別の場所で動く Podman で、作業用のフォルダーを渡せるか ／ 社内で Podman を使えるか",
+      "wrap": true,
+      "isSubtle": true
+     },
+     {
+      "type": "TextBlock",
+      "text": "対象: 社内の Windows PC で、AI が書いたコードをコンテナで動かそうとしている開発の担当",
+      "wrap": true,
+      "isSubtle": true
+     }
+    ],
+    "actions": [
+     {
+      "type": "Action.OpenUrl",
+      "title": "一次情報を開く",
+      "url": "https://github.com/Isogyu/autonomous-ai-research/actions/runs/45628443267"
+     }
+    ]
+   }
+  }
+ ]
+}

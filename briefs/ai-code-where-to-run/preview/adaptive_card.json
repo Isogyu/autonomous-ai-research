@@ -1,0 +1,84 @@
+{
+ "type": "message",
+ "attachments": [
+  {
+   "contentType": "application/vnd.microsoft.card.adaptive",
+   "contentUrl": null,
+   "content": {
+    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+    "type": "AdaptiveCard",
+    "version": "1.5",
+    "msteams": {
+     "width": "Full"
+    },
+    "body": [
+     {
+      "type": "TextBlock",
+      "text": "判断する｜情報紹介・未再現",
+      "wrap": true,
+      "weight": "Bolder",
+      "isSubtle": true
+     },
+     {
+      "type": "TextBlock",
+      "text": "AI が書いたコードを、社内 PC のどこで動かすか",
+      "wrap": true,
+      "size": "Large",
+      "weight": "Bolder"
+     },
+     {
+      "type": "TextBlock",
+      "text": "- そのまま動かすと、自分の権限で届く範囲すべてに触れる\n- Podman のコンテナは、通信と書き込み先を指定して絞れる\n- どの隔離の方式も、社内の許可の確認が先に要る",
+      "wrap": true
+     },
+     {
+      "type": "TextBlock",
+      "text": "条件・制約",
+      "wrap": true,
+      "weight": "Bolder"
+     },
+     {
+      "type": "TextBlock",
+      "text": "- 社内の Windows PC では、どの方式も動かしていない\n- WSL 2 と仮想化の機能を使えるかは、社内で未確認\n- コンテナに替えるだけでは、隔離は成立しない",
+      "wrap": true
+     },
+     {
+      "type": "TextBlock",
+      "text": "図の内容（動かす場所で、隔離と、要る確認はどう違うか）",
+      "wrap": true,
+      "weight": "Bolder"
+     },
+     {
+      "type": "TextBlock",
+      "text": "- そのまま実行: 隔離の範囲 は なし、社内で要る確認 は なし\n- WSL 2 の隔離機能: 隔離の範囲 は 未確認、社内で要る確認 は WSL 2 の許可\n- Podman コンテナ: 隔離の範囲 は 指定した範囲、社内で要る確認 は 仮想化の許可",
+      "wrap": true
+     },
+     {
+      "type": "TextBlock",
+      "text": "検証の状況: 情報紹介・未再現 — 各提供元の公式の文書を読み比べただけ。社内の Windows PC では、どの方式も動かしていない",
+      "wrap": true
+     },
+     {
+      "type": "TextBlock",
+      "text": "確かめていない点: 社内で WSL 2、Hyper-V、Podman を使えるか ／ Claude Code の WSL 2 でのサンドボックスが制限する範囲（該当の文書を読んでいない） ／ Windows 上の Podman の仮想環境で、指定した制限が実際に効くか（Linux での確認は別の投稿候補 podman-isolation-verify にある）",
+      "wrap": true,
+      "isSubtle": true
+     },
+     {
+      "type": "TextBlock",
+      "text": "対象: 社内の Windows PC で、AI が書いたコードを動かして試そうとしている開発の担当",
+      "wrap": true,
+      "isSubtle": true
+     }
+    ],
+    "actions": [
+     {
+      "type": "Action.OpenUrl",
+      "title": "一次情報を開く",
+      "url": "https://docs.podman.io/en/latest/markdown/podman-run.1.html"
+     }
+    ]
+   }
+  }
+ ]
+}

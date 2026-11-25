@@ -43,3 +43,6 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+
+# 発信の投稿候補: 照合のために置く出典の文章（第三者の文章なので、リポジトリに入れない）
+briefs/*/sources/
