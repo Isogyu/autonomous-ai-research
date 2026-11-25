@@ -39,6 +39,7 @@ Try-Run '既定の文字コード（ANSI / OEM）' { '{0} / {1}' -f [Text.Encodi
 Try-Run '長いパスの許可' { (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -ErrorAction Stop).LongPathsEnabled }
 
 Section 'WSL / Hyper-V（導入の状況。許可の有無は別に確認する）'
+$env:WSL_UTF8 = '1'   # wsl.exe の出力を UTF-8 にする（このプロセスの中だけ）
 Try-Run 'wsl --status' { & wsl.exe --status }
 Try-Run 'wsl --version' { & wsl.exe --version }
 Try-Run 'wsl --list --verbose' { & wsl.exe --list --verbose }
