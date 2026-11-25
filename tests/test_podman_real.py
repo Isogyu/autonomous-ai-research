@@ -11,7 +11,6 @@ import json
 import os
 import shutil
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -90,7 +89,7 @@ def build_fix_context(findings, **kw):
         "import_numpy": _try(lambda: __import__("numpy") and "IMPORTED"),
         "uid": os.getuid(),
         "kw": sorted(kw),
-        "env": sorted(k for k in os.environ if "KEY" in k or "TOKEN" in k or k.startswith(("AAR_", "GH_", "ANTHROPIC", "OPENAI"))),
+        "env": sorted(k for k in os.environ if k.endswith("_API_KEY") or "TOKEN" in k or "SECRET" in k or k.startswith(("AAR_", "GH_", "GITHUB", "ANTHROPIC", "OPENAI", "CLAUDE", "CODEX"))),
         "visible": sorted(p for p in ("/work", "/Users", "/home/runner", "/mnt/c", "/run/podman", "/var/run/docker.sock",
                                       "/run/user", "HOSTMARK") if os.path.exists(p.replace("HOSTMARK", "%s"))),
         "tmp_files": sorted(os.listdir("/tmp")),
@@ -105,7 +104,7 @@ async def test_candidate_sees_only_its_own_inputs(env, monkeypatch):
 
     await _verified(env, env.ek.PODMAN_LIMITS)
     mark = env.tmp / "host-secret.txt"                       # ホスト側にだけあるファイル（評価器や正解の代わり）
-    mark.write_text("answer key", encoding="utf-8")
+    mark.write_text("answer key", encoding="utf-8", newline="\n")
     monkeypatch.setenv("AAR_FAKE_API_KEY", "should-not-leak")
     cases = env.ek.synthetic_cases("t", 6000, 2)
     r = env.ek.evaluate(PROBE_CANDIDATE % str(mark), TARGETS["fix_context"], cases, isolation="podman", deny_read=[])

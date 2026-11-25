@@ -41,6 +41,13 @@ def doctor() -> None:
         with connect() as conn:
             v = fetch_one(conn, "SELECT extversion FROM pg_extension WHERE extname = 'vector'")
         checks.append(("PostgreSQL + pgvector", bool(v), f"pgvector {v['extversion']}" if v else "拡張がない"))
+        with connect() as conn:
+            who = fetch_one(conn, """SELECT current_user AS u, (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) AS su,
+                                     (SELECT tableowner = current_user FROM pg_tables WHERE tablename = 'schema_migrations') AS owner""")
+        strong = bool(who and (who["su"] or who["owner"]))
+        checks.append(("DB の実行用の権限", not strong, f"{who['u']}: " + (   # type: ignore[index]
+            "表の所有者（または管理者）で接続している。追記だけの表のトリガーを無効にできる権限なので、実行用の役割（aar_app）に分ける"
+            if strong else "所有者ではない。追記だけの表の書き換えも、トリガーの無効化もできない")))
     except Exception as e:  # noqa: BLE001
         checks.append(("PostgreSQL + pgvector", False, str(e)[:80]))
     try:
@@ -223,7 +230,17 @@ def podman_verify(image: Annotated[str, typer.Option(help="検証するイメー
 @app.command("migrate")
 def migrate_cmd() -> None:
     """DB のスキーマを最新にする。"""
-    typer.echo(f"適用: {migrate() or 'なし（最新）'}")
+    s = get_settings()
+    typer.echo(f"適用: {migrate(s.migration_database_url or None) or 'なし（最新）'}")
+    if s.migration_database_url:
+        import os
+
+        from aar.db.core import setup_app_role
+        pw = os.environ.get("AAR_APP_PG_PASSWORD", "")
+        if not pw:
+            typer.echo("実行用の役割の権限は付け直していない（AAR_APP_PG_PASSWORD が未設定）", err=True)
+            raise typer.Exit(1)
+        typer.echo(f"実行用の役割: {setup_app_role(s.migration_database_url, pw)}")
 
 
 @app.command()

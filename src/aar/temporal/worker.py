@@ -12,7 +12,7 @@ from temporalio.worker import Worker
 
 from aar import service
 from aar.config import get_settings
-from aar.db.core import migrate
+from aar.db.core import migrate, pending_migrations
 from aar.temporal.activities import ALL_ACTIVITIES
 from aar.temporal.workflows import ALL_WORKFLOWS
 
@@ -21,7 +21,13 @@ log = logging.getLogger("aar.worker")
 
 async def run_worker(*, schedules: bool = True) -> None:
     settings = get_settings()
-    migrate()
+    if settings.migration_database_url:
+        # 実行用の役割で動いている。移行は適用しない（所有者の接続で `aar migrate` を先に実行する）
+        pending = pending_migrations()
+        if pending:
+            raise RuntimeError("未適用の移行がある（aar migrate を実行する）: " + ", ".join(pending))
+    else:
+        migrate()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.workspaces_dir.mkdir(parents=True, exist_ok=True)
     client = await service.get_client()

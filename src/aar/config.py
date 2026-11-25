@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AAR_", env_file=".env", extra="ignore")
 
     database_url: str = "postgresql://aar:aar@127.0.0.1:55432/aar"
+    # 移行を適用する接続（表の所有者）。設定すると、database_url は実行用の役割（aar_app）の接続として扱い、
+    # ワーカーは移行を適用しない（未適用があれば起動しない）。空なら database_url で移行も行う（従来どおり）
+    migration_database_url: str = ""
     temporal_address: str = "127.0.0.1:7233"
     temporal_namespace: str = "default"
     task_queue: str = "aar"

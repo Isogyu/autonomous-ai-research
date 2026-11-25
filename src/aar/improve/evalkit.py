@@ -292,7 +292,7 @@ def run_variant(module_source: str, target: Target, cases: list[dict[str, Any]],
         shutil.copyfile(Path(__file__).with_name("child.py"), tmp / "child.py")
         job = json.dumps({"module": str(tmp / "module.py"), "entry": target.entry,
                           "cases": [{"id": c["id"], "inputs": c["inputs"]} for c in cases]}, ensure_ascii=False, default=str)
-        cmd = [python, "-I", "-S", "-B", str(tmp / "child.py")]
+        cmd = [python, "-I", "-S", "-B", "-X", "utf8", str(tmp / "child.py")]     # -I は PYTHONIOENCODING を無視するので、UTF-8 を明示する
         if isolation == "seatbelt":
             cmd = ["sandbox-exec", "-p", _seatbelt_profile(tmp, deny_read), *cmd]
         env = (proc.base_env() if proc.IS_WINDOWS else {"PATH": "/usr/bin:/bin"}) | {

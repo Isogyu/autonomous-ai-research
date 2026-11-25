@@ -66,7 +66,7 @@ async def test_run_passes_arguments_stdin_and_unicode_without_a_shell(tmp_path):
 async def test_timeout_stops_the_child_and_the_grandchild(tmp_path):
     pidfile = tmp_path / "pids"
     r = await proc.run([PY, "-c", _SPAWNER.replace("AFTER", "time.sleep(120)"), str(pidfile)], cwd=tmp_path, timeout_s=3, poll_s=0.2, grace_s=2)
-    pids = [int(x) for x in pidfile.read_text().split()]
+    pids = [int(x) for x in pidfile.read_text(encoding="utf-8").split()]
     assert r.timed_out and r.returncode == -1
     assert _wait_gone(pids), "時間切れのあとに、子か孫のプロセスが残っている"
     assert r.survivors == 0
@@ -78,19 +78,19 @@ async def test_cancellation_stops_the_child_and_the_grandchild(tmp_path):
                                           timeout_s=120, poll_s=0.2, grace_s=2))
     for _ in range(100):
         await asyncio.sleep(0.1)
-        if pidfile.exists() and len(pidfile.read_text().split()) == 2:
+        if pidfile.exists() and len(pidfile.read_text(encoding="utf-8").split()) == 2:
             break
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert _wait_gone([int(x) for x in pidfile.read_text().split()]), "キャンセルのあとに、子か孫のプロセスが残っている"
+    assert _wait_gone([int(x) for x in pidfile.read_text(encoding="utf-8").split()]), "キャンセルのあとに、子か孫のプロセスが残っている"
 
 
 async def test_grandchild_left_behind_by_a_finished_parent_is_stopped(tmp_path):
     pidfile = tmp_path / "pids"
     r = await proc.run([PY, "-c", _SPAWNER.replace("AFTER", "sys.exit(0)"), str(pidfile)], cwd=tmp_path, timeout_s=60, poll_s=0.2)
     assert r.returncode == 0 and not r.timed_out
-    assert _wait_gone([int(x) for x in pidfile.read_text().split()]), "親が終わったあとに、孫のプロセスが残っている"
+    assert _wait_gone([int(x) for x in pidfile.read_text(encoding="utf-8").split()]), "親が終わったあとに、孫のプロセスが残っている"
 
 
 def test_batch_launchers_are_not_started_directly(tmp_path):
@@ -98,23 +98,23 @@ def test_batch_launchers_are_not_started_directly(tmp_path):
     bin_dir = tmp_path / "npm bin"
     script = bin_dir / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
     script.parent.mkdir(parents=True)
-    script.write_text("// js")
+    script.write_text("// js", encoding="utf-8", newline="\n")
     node = bin_dir / "node.exe"
-    node.write_text("")
+    node.write_text("", encoding="utf-8", newline="\n")
     shim = bin_dir / "codex.cmd"
-    shim.write_text('@ECHO off\r\nSETLOCAL\r\nSET dp0=%~dp0\r\n"%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n')
+    shim.write_text('@ECHO off\r\nSETLOCAL\r\nSET dp0=%~dp0\r\n"%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n', encoding="utf-8", newline="\n")
     for f in (shim, node):
         f.chmod(0o755)
     assert proc.resolve_command("codex", str(shim)) == [str(node), str(script)]
     # 定型でないバッチファイルは、推測せずに拒否する（cmd.exe 経由では引数の分離を保てない）
     odd = bin_dir / "claude.cmd"
-    odd.write_text("@echo off\r\nsomething %*\r\n")
+    odd.write_text("@echo off\r\nsomething %*\r\n", encoding="utf-8", newline="\n")
     odd.chmod(0o755)
     with pytest.raises(proc.LauncherError):
         proc.resolve_command("claude", str(odd))
     # 同じ名前の .exe があれば、それを使う
     exe = bin_dir / "claude.exe"
-    exe.write_text("")
+    exe.write_text("", encoding="utf-8", newline="\n")
     assert proc.resolve_command("claude", str(odd)) == [str(exe)]
     with pytest.raises(proc.LauncherError):
         proc.resolve_command("no-such-tool-aar")
@@ -168,7 +168,7 @@ async def test_container_is_named_removed_and_checked_after_every_run(fake, tmp_
     assert any(c[2] == "rm" and t.name in c for c in fake.calls())
     # 残っていたら、残ったと報告する
     monkeypatch.setenv("FAKE_PODMAN_RUN", "echo")
-    (fake.dir / "leftover").write_text("deadbeef")
+    (fake.dir / "leftover").write_text("deadbeef", encoding="utf-8", newline="\n")
     left = await container.run_container(fake.engine, "img", ["x"], flags=[], cwd=tmp_path, timeout_s=30, poll_s=0.2)
     assert not left.removed
 
@@ -192,7 +192,7 @@ def test_unverified_or_changed_configuration_is_refused(fake, tmp_path):
     with pytest.raises(container.IsolationUnavailable):                                # 隔離の指定が変われば、検証し直す
         container.require_verified(fake.engine, image, container.Limits(memory="4g"), "eval", data_dir=tmp_path)
     info = {"version": {"Version": "5.4.0"}, "host": {"security": {"rootless": False}, "cgroupVersion": "v2", "os": "linux", "arch": "amd64"}}
-    (fake.dir / "info.json").write_text(json.dumps(info))
+    (fake.dir / "info.json").write_text(json.dumps(info), encoding="utf-8", newline="\n")
     assert container.engine_info(fake.engine)["rootless"] is False                     # rootless かどうかは、接続先に問い合わせた値
     with pytest.raises(container.IsolationUnavailable):                                # 構成が変われば、検証し直す
         container.require_verified(fake.engine, image, LIMITS, "eval", data_dir=tmp_path)
@@ -420,20 +420,20 @@ def test_services_are_started_once_and_stale_pids_are_not_trusted(ctl_settings):
     st = ctl.service_state(s, "ui")
     assert st["state"] == "running"
     for _ in range(100):
-        if (s.data_dir / "pids").exists() and len((s.data_dir / "pids").read_text().split()) == 2:
+        if (s.data_dir / "pids").exists() and len((s.data_dir / "pids").read_text(encoding="utf-8").split()) == 2:
             break
         time.sleep(0.1)
-    pids = [int(x) for x in (s.data_dir / "pids").read_text().split()]
+    pids = [int(x) for x in (s.data_dir / "pids").read_text(encoding="utf-8").split()]
     assert "起動した" in ctl.logs("ui")                                                    # 出力はログに残る
     assert ctl.stop_one(s, "ui", grace_s=5) == "ui: 停止"
     assert _wait_gone(pids), "停止のあとに、サービスの子孫のプロセスが残っている"
     assert ctl.service_state(s, "ui")["state"] == "stopped" and ctl.stop_one(s, "ui") == "ui: 停止済み"
     # 古い PID: 同じ番号の別のプロセスが動いていても、本人とはみなさない（止めもしない）
     me = psutil.Process(os.getpid())
-    ctl._pidfile(s, "worker").write_text(json.dumps({"pid": me.pid, "create_time": me.create_time() - 3600}))
+    ctl._pidfile(s, "worker").write_text(json.dumps({"pid": me.pid, "create_time": me.create_time() - 3600}), encoding="utf-8", newline="\n")
     assert ctl.service_state(s, "worker")["state"] == "stale"
     assert "片付けた" in ctl.stop_one(s, "worker") and psutil.pid_exists(me.pid)
-    ctl._pidfile(s, "worker").write_text(json.dumps({"pid": me.pid, "create_time": me.create_time() - 3600}))
+    ctl._pidfile(s, "worker").write_text(json.dumps({"pid": me.pid, "create_time": me.create_time() - 3600}), encoding="utf-8", newline="\n")
     out = ctl.launch(s, "worker", [PY, "-c", "import time; time.sleep(60)"])
     assert "異常終了していた" in out
     ctl.stop_one(s, "worker", grace_s=2)
@@ -447,6 +447,6 @@ def test_control_lock_is_exclusive_and_recovers_from_a_dead_owner(ctl_settings):
         with pytest.raises(RuntimeError, match="進行中"):
             with ctl.control_lock(s, wait_s=0.5):
                 pass
-    (ctl._run_dir(s) / "ctl.lock").write_text(json.dumps({"pid": 2**22 + 12345, "create_time": 1.0}))   # 持ち主がいないロック
+    (ctl._run_dir(s) / "ctl.lock").write_text(json.dumps({"pid": 2**22 + 12345, "create_time": 1.0}), encoding="utf-8", newline="\n")   # 持ち主がいないロック
     with ctl.control_lock(s, wait_s=1):
         pass
