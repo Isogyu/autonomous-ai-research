@@ -463,7 +463,7 @@ CI の結果（実行 45626435663。この節を書く前のコミットでの�
 |---|---|---|---|
 | test | Linux。PostgreSQL は GitHub の service（Docker） | 152 件合格、9 件 skip | 従来の経路。Podman の検証ではない。skip は macOS 専用 2 件、Podman の実物 5 件、Windows 専用 2 件 |
 | windows | GitHub の Windows の実行環境（社内の PC ではない）。DB と Podman なし | 109 件合格、52 件 skip | DB を使う 44 件、Podman の実物 5 件、macOS 専用 2 件、`gh` の代役を使う提出の 1 件は動いていない。Windows 専用の 2 件はここで合格 |
-| podman | Linux、Podman 4.9 系の rootless、cgroups v2 | 実物の隔離 5 件合格。全テスト 157 件合格、4 件 skip（PostgreSQL は Podman） | Windows 上の Podman の仮想環境の確認ではない |
+| podman | Linux、Podman 5.7.0 の rootless、cgroups v2 | 実物の隔離 5 件合格。全テスト 157 件合格、4 件 skip（PostgreSQL は Podman） | Windows 上の Podman の仮想環境の確認ではない |
 
 基準の件数: このブランチのテストは 161 件（PR #11 は 134 件、`main` は 116 件）。**Windows で全件が通ったわけではない。**
 Mac では、DB なしで 110 件合格・51 件 skip（Docker が止まっていたので、DB を使うテストは動かしていない）。
