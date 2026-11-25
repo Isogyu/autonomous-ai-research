@@ -23,7 +23,7 @@ DEFAULT_PLAN: dict[str, Any] = {
     "no_case_regression": True,                      # どの課題でも、参照の解決が現行方式を下回らない
     "max_mean_chars_ratio": 4.0,                     # 許容する後退（文脈の長さ。現行方式の平均に対する比）
     "budget_chars": 24000,
-    "required_isolation": "seatbelt",
+    "required_isolation": "podman",                 # 検証済みの Podman コンテナ。満たさない実行では、採否を保留にする
     "min_sealed_real_cases": 3,                      # 標本の下限。満たさなければ、指標が良くても保留
     "min_sealed_real_groups": 2,
     "max_sealed_evaluations": 1,                     # 封印評価を見てよい回数（候補の系統ごと）

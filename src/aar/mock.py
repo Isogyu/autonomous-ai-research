@@ -102,7 +102,7 @@ def _files(cwd: Path, files: dict[str, str]) -> None:
     for rel, text in files.items():
         p = cwd / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text, encoding="utf-8")
+        p.write_text(text, encoding="utf-8", newline="\n")
 
 
 def _claude(prompt: str, cwd: Path, schema: dict[str, Any] | None) -> dict[str, Any] | AgentResult:
@@ -137,22 +137,22 @@ def _claude(prompt: str, cwd: Path, schema: dict[str, Any] | None) -> dict[str, 
     if "not_fixed" in props:
         if os.environ.get("AAR_MOCK_FIX") == "prereg":   # 異常系のテスト用: 修正担当が事前登録を書き換える
             target = sorted((cwd / "prereg").glob("cycle*.json"))[-1]
-            target.write_text(target.read_text(encoding="utf-8").rstrip("\n") + "\n \n", encoding="utf-8")
+            target.write_text(target.read_text(encoding="utf-8").rstrip("\n") + "\n \n", encoding="utf-8", newline="\n")
             return {"fixed": [{"issue_id": "P101", "what_changed": "判定基準を書き直した"}], "not_fixed": [], "needs_rerun": False}
-        if (cwd / "experiments/analyze.py").exists() and "len(t) // 2" in (cwd / "experiments/analyze.py").read_text():
+        if (cwd / "experiments/analyze.py").exists() and "len(t) // 2" in (cwd / "experiments/analyze.py").read_text(encoding="utf-8"):
             _files(cwd, {"experiments/analyze.py": ANALYZE_FIXED})
             return {"fixed": [{"issue_id": "I001", "what_changed": "処置群の全試行で平均を計算するよう修正"}], "not_fixed": [],
                     "needs_rerun": True}
         readme = cwd / "README.md"
         if readme.exists() and "## 引用" not in readme.read_text(encoding="utf-8"):
-            readme.write_text(readme.read_text(encoding="utf-8") + "\n## 引用\n\n（モック）原論文の書誌。\n", encoding="utf-8")
+            readme.write_text(readme.read_text(encoding="utf-8") + "\n## 引用\n\n（モック）原論文の書誌。\n", encoding="utf-8", newline="\n")
             return {"fixed": [{"issue_id": "P101", "what_changed": "README に引用の節を追加"}], "not_fixed": [], "needs_rerun": False}
         from aar.fixture import OVERCLAIM_README, OVERCLAIM_REPORT
         cleaned = False
         for rel, block in (("README.md", OVERCLAIM_README), ("report/report.md", OVERCLAIM_REPORT)):
             f = cwd / rel
             if f.exists() and block in f.read_text(encoding="utf-8"):
-                f.write_text(f.read_text(encoding="utf-8").replace(block, ""), encoding="utf-8")
+                f.write_text(f.read_text(encoding="utf-8").replace(block, ""), encoding="utf-8", newline="\n")
                 cleaned = True
         if cleaned:
             return {"fixed": [{"issue_id": "P102", "what_changed": "証拠を超える主張を取り除いた"}], "not_fixed": [], "needs_rerun": False}
@@ -189,11 +189,11 @@ def _recompute(target: Path) -> tuple[float | None, float | None]:
     analyses = sorted(target.glob("results/cycle*/analysis/analysis.json"))
     if not raws or not analyses:
         return None, None
-    rows = [json.loads(line) for line in raws[-1].read_text().splitlines() if line.strip()]
+    rows = [json.loads(line) for line in raws[-1].read_text(encoding="utf-8").splitlines() if line.strip()]
     b = [r["score"] for r in rows if r["condition"] == "baseline"]
     t = [r["score"] for r in rows if r["condition"] == "treatment"]
     independent = sum(t) / len(t) - sum(b) / len(b)
-    original = next((r["value"] for r in json.loads(analyses[-1].read_text())["results"]
+    original = next((r["value"] for r in json.loads(analyses[-1].read_text(encoding="utf-8"))["results"]
                      if r.get("analysis_kind") == "confirmatory"), None)
     return original, independent
 
@@ -228,7 +228,7 @@ def _codex(prompt: str, cwd: Path, schema: dict[str, Any] | None) -> dict[str, A
             if original is not None and independent is not None:
                 w.writerow(["C001", "平均の差", "treatment vs baseline", original, independent, original - independent, 1e-9,
                             "浮動小数の誤差", "", "", "生データからの再計算", "E001", "一致" if match else "不一致"])
-        (cwd / "executive_summary.md").write_text("# 監査の要約（モック）\n\n生データから平均の差を再計算して照合した。\n", encoding="utf-8")
+        (cwd / "executive_summary.md").write_text("# 監査の要約（モック）\n\n生データから平均の差を再計算して照合した。\n", encoding="utf-8", newline="\n")
         return {"audit_status": "completed", "research_verdict": "モックの監査（平均の差だけを再計算）",
                 "publication_verdict": "Publishable" if match else "Not Yet Publishable",
                 "independent_recalculation_done": independent is not None, "data_leak_found": False,

@@ -28,10 +28,10 @@ async def stack(db_url, tmp_path, monkeypatch):
 
     policy = tmp_path / "policy.yaml"
     policy.write_text((ROOT / "config" / "policy.yaml").read_text(encoding="utf-8")
-                      .replace("sandbox: docker ", "sandbox: none ").replace("macos: true", "macos: false"), encoding="utf-8")
+                      .replace("sandbox: docker ", "sandbox: none ").replace("macos: true", "macos: false"), encoding="utf-8", newline="\n")
     skill = tmp_path / "skills" / "independent-research-audit"
     (skill / "assets").mkdir(parents=True)
-    (skill / "SKILL.md").write_text("# テスト用の監査 Skill の代わり\n", encoding="utf-8")
+    (skill / "SKILL.md").write_text("# テスト用の監査 Skill の代わり\n", encoding="utf-8", newline="\n")
     pub_skill = tmp_path / "skills" / "repo-publication-audit"
     install_publication_skill(pub_skill)
     env = await WorkflowEnvironment.start_local(dev_server_existing_path=shutil.which("temporal"))
@@ -71,9 +71,9 @@ async def stack(db_url, tmp_path, monkeypatch):
 def install_publication_skill(path: Path) -> None:
     """公開品質監査 Skill の代わり（ファイルの有無だけを見るため、中身は空に近い）。"""
     (path / "references").mkdir(parents=True, exist_ok=True)
-    (path / "SKILL.md").write_text("# テスト用の公開品質監査 Skill の代わり\n", encoding="utf-8")
+    (path / "SKILL.md").write_text("# テスト用の公開品質監査 Skill の代わり\n", encoding="utf-8", newline="\n")
     for name in ("rubric.md", "security.md", "report.md"):
-        (path / "references" / name).write_text("# テスト用\n", encoding="utf-8")
+        (path / "references" / name).write_text("# テスト用\n", encoding="utf-8", newline="\n")
 
 
 async def _proposal(stack) -> str:
@@ -199,7 +199,7 @@ async def test_policy_change_puts_project_on_hold_until_restored(stack):
     await service.control_project(pid, "resume")
     await asyncio.sleep(3)
     assert (await _wait(pid, ("on_hold", "completed", "failed")))["status"] == "on_hold"
-    stack["policy"].write_text(original, encoding="utf-8")
+    stack["policy"].write_text(original, encoding="utf-8", newline="\n")
     await service.control_project(pid, "resume")
     p = await _wait(pid, ("completed", "failed"))
     assert p["outcome"] == "publishable", p["outcome_reason"]
@@ -243,7 +243,7 @@ async def _select_with_tampered_policy(stack, proposal_id: str, original: str) -
                                         execution_mode="mock")
     # 登録のあと、開始の前に方針を書き換える（渡された内容が元と同じなら、基準を緩める書き換えにする）
     changed = original.replace("max_open_major: 0", "max_open_major: 99") if original == stack["policy"].read_text(encoding="utf-8") else original
-    stack["policy"].write_text(changed, encoding="utf-8")
+    stack["policy"].write_text(changed, encoding="utf-8", newline="\n")
     from aar import service
     await service.start_workflow_for(await service.get_client(), project)
     return project
@@ -267,7 +267,7 @@ async def test_reopen_continues_from_audit_with_same_gates(stack):
     from aar.db.core import connect, fetch_all
 
     stack["policy"].write_text(stack["policy"].read_text(encoding="utf-8").replace(
-        "max_audit_rounds: 3        # 修正と再監査の上限", "max_audit_rounds: 1        # 修正と再監査の上限"), encoding="utf-8")
+        "max_audit_rounds: 3        # 修正と再監査の上限", "max_audit_rounds: 1        # 修正と再監査の上限"), encoding="utf-8", newline="\n")
     assert config.load_policy().gates.research.max_audit_rounds == 1
     proposal_id = await _proposal(stack)
     project = await service.select_and_start(proposal_id)
@@ -370,7 +370,7 @@ async def test_reopen_from_publication_keeps_history_and_requires_explicit_polic
     ws = Path(p["workspace_path"])
     head_before = workspace.head(ws)
 
-    stack["policy"].write_text(stack["policy"].read_text(encoding="utf-8") + "\n# 方針を変えた\n", encoding="utf-8")
+    stack["policy"].write_text(stack["policy"].read_text(encoding="utf-8") + "\n# 方針を変えた\n", encoding="utf-8", newline="\n")
     with pytest.raises(ValueError, match="adopt-current-policy"):
         await service.reopen_project(pid, from_="publication")                     # 黙って新しい方針にはならない
     with pytest.raises(ValueError):
@@ -429,7 +429,7 @@ async def test_copied_third_party_text_blocks_publication_even_when_auditor_pass
         first = fetch_one(conn, "SELECT detail FROM audit_runs WHERE project_id = %s AND kind = 'publication_quality' ORDER BY round DESC LIMIT 1", (pid,))
     assert first["detail"]["required_checks"]["violations"] == [] and first["detail"]["required_checks"]["unverified"] == []
     ws = Path(p["workspace_path"])
-    (ws / "docs" / "source_abstract.md").write_text("# 原論文の要旨\n\n" + mock_papers()[0].abstract + "\n", encoding="utf-8")
+    (ws / "docs" / "source_abstract.md").write_text("# 原論文の要旨\n\n" + mock_papers()[0].abstract + "\n", encoding="utf-8", newline="\n")
     workspace.commit_all(ws, "原論文の要旨を追加（検証用の不具合）")
     await service.reopen_project(pid, from_="publication")
     p = await _wait(pid, ("completed", "failed"), timeout=180)
@@ -448,7 +448,7 @@ async def test_rate_limit_waits_for_reset_without_probing(stack, monkeypatch):
     from aar.db.core import connect, fetch_all
 
     limit_file = stack["tmp"] / "rate_limit.txt"
-    limit_file.write_text("codex 1 You have hit your usage limit. Try again in 4 seconds.\n", encoding="utf-8")
+    limit_file.write_text("codex 1 You have hit your usage limit. Try again in 4 seconds.\n", encoding="utf-8", newline="\n")
     monkeypatch.setenv("AAR_MOCK_RATE_LIMIT_FILE", str(limit_file))
     monkeypatch.setenv("AAR_RATE_LIMIT_MARGIN_S", "0")
     monkeypatch.setenv("AAR_RATE_LIMIT_MIN_WAIT_S", "1")
@@ -596,7 +596,7 @@ async def test_content_added_after_the_audit_is_checked_before_submission(stack,
     def leaky(ws, dirs, *rest):
         original(ws, dirs, *rest)
         if any("publication-round" in str(d) for d in dirs):   # 提出の直前（監査のあと）にだけ持ち込む
-            (ws / "audit" / "abstract.md").write_text(mock_papers()[0].abstract + "\n", encoding="utf-8")
+            (ws / "audit" / "abstract.md").write_text(mock_papers()[0].abstract + "\n", encoding="utf-8", newline="\n")
     monkeypatch.setattr(deliv, "copy_audit", leaky)
     await service.reopen_project(pid, from_="publication")
     p = await _wait(pid, ("completed", "failed"), timeout=180)
@@ -615,7 +615,7 @@ async def test_failure_while_the_host_slept_is_retried_then_held(stack, monkeypa
     from aar.temporal import workflows
 
     monkeypatch.setenv("AAR_MOCK_PUB", "inconsistent")          # 監査が「結果が正常でない」で失敗し続ける（CLI の打ち切りと同じ種類の失敗）
-    monkeypatch.setattr(limits, "host_sleep_seconds", lambda since, until=None: 1800)
+    monkeypatch.setattr(limits, "host_sleep_evidence", lambda since, until=None: limits.SleepEvidence("slept", 1800, "test"))
     proposal_id = await _proposal(stack)
     pid = (await service.select_and_start(proposal_id))["id"]
     p = await _wait(pid, ("completed", "failed", "on_hold"), timeout=240)
@@ -624,7 +624,7 @@ async def test_failure_while_the_host_slept_is_retried_then_held(stack, monkeypa
         checks = fetch_all(conn, "SELECT detail FROM workflow_events WHERE project_id = %s AND event = 'host_sleep_check' ORDER BY id", (pid,))
     assert len(checks) == workflows.MAX_SLEEP_RETRIES + 1 and all(c["detail"]["slept"] for c in checks)
     # スリープしていなければ、従来どおり失敗で確定する
-    monkeypatch.setattr(limits, "host_sleep_seconds", lambda since, until=None: 0)
+    monkeypatch.setattr(limits, "host_sleep_evidence", lambda since, until=None: limits.SleepEvidence("awake", 0, "test"))
     await service.control_project(pid, "resume")
     p = await _wait(pid, ("completed", "failed"), timeout=240)
     assert p["status"] == "failed" and "正常な結果" in p["outcome_reason"], p["outcome_reason"]
@@ -644,7 +644,7 @@ async def test_content_changed_after_the_audit_blocks_submission(stack, monkeypa
     def leaky(ws, dirs, *rest):
         original(ws, dirs, *rest)
         if any("publication-round" in str(d) for d in dirs):   # 提出の直前（監査のあと）にだけ、監査していない変更が入る
-            (ws / "README.md").write_text((ws / "README.md").read_text(encoding="utf-8") + "\n監査のあとに足した主張。\n", encoding="utf-8")
+            (ws / "README.md").write_text((ws / "README.md").read_text(encoding="utf-8") + "\n監査のあとに足した主張。\n", encoding="utf-8", newline="\n")
     monkeypatch.setattr(deliv, "copy_audit", leaky)
     proposal_id = await _proposal(stack)
     pid = (await service.select_and_start(proposal_id))["id"]
@@ -671,7 +671,7 @@ async def test_public_copy_removes_third_party_text_from_history_and_keeps_the_o
     src_ws = Path(p["workspace_path"])
     abstract = mock_papers()[0].abstract
     # いまのファイルには無く、過去のコミットにだけ残っている状態を作る
-    (src_ws / "docs" / "source_abstract.md").write_text(abstract + "\n", encoding="utf-8")
+    (src_ws / "docs" / "source_abstract.md").write_text(abstract + "\n", encoding="utf-8", newline="\n")
     workspace.commit_all(src_ws, "要旨を追加")
     (src_ws / "docs" / "source_abstract.md").unlink()
     workspace.commit_all(src_ws, "要旨を削除")

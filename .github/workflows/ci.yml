@@ -5,6 +5,12 @@ on:
   pull_request:
 permissions:
   contents: read
+# 3 つの経路に分ける。ある経路の合格を、別の経路の合格に数えない。
+#   test    : 単体テストと、台本のエージェントでの一巡（Linux）。PostgreSQL は GitHub の service（Docker）で、Podman の検証ではない。
+#   windows : Windows でだけ意味のある確認（Job Object による回収、改行と文字コード、PowerShell の入口、電源の記録）。
+#             GitHub の Windows の実行環境であって、社内の Windows PC ではない。Podman と DB は使わない。
+#   podman  : 実物の Podman（Linux、rootless）での隔離の確認。Windows 上の Podman の仮想環境の確認ではない。
+# podman と windows_only の印のテストは、対象の経路でしか実行されない。ほかの経路での skip は合格ではない。
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -30,4 +36,86 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check src tests
       # エージェントは台本に置き換え、Temporal の開発用サーバーと PostgreSQL は実物を使う。外部 API は呼ばない
-      - run: pytest -q
+      - run: pytest -q -rs
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: 取得したファイルの改行が変換されていない
+        shell: bash
+        run: |
+          git ls-files --eol | grep -v "w/lf" | grep -v "w/none" | grep -v "w/-text" && exit 1 || echo "CRLF に変換されたファイルはない"
+      - name: 仮想環境（aarctl.ps1 が使う場所）に導入する
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install -e ".[dev]"
+      # DB を使わないテストのすべて。windows_only の印のテストは、ここでだけ実行される
+      - name: テスト（DB なし）
+        run: .venv\Scripts\python.exe -m pytest -q -rs
+      - name: PowerShell の入口（Windows PowerShell 5.1 と PowerShell 7）
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\aarctl.ps1 status
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          pwsh -NoProfile -File scripts\aarctl.ps1 status
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: 環境の調査のスクリプトが、読み取りだけで最後まで動く
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\Probe-Environment.ps1
+
+  podman:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AAR_PODMAN_TESTS: "1"
+      AAR_REQUIRE_PODMAN: "1"        # Podman が使えなければ、skip ではなく失敗にする
+      AAR_CONTAINER_ENGINE: podman
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: Podman の構成（rootless かどうかは、ここの出力で確かめる）
+        run: |
+          podman --version
+          podman info --format 'rootless={{.Host.Security.Rootless}} remote={{.Host.ServiceIsRemote}} cgroups={{.Host.CgroupsVersion}} controllers={{.Host.CgroupControllers}} runtime={{.Host.OCIRuntime.Name}}'
+      - name: イメージを取得して、ダイジェストで固定する
+        run: |
+          podman pull docker.io/library/python:3.12-slim
+          podman pull docker.io/pgvector/pgvector:0.8.7-pg17
+          echo "AAR_TEST_IMAGE=$(podman image inspect --format '{{index .RepoDigests 0}}' docker.io/library/python:3.12-slim)" >> "$GITHUB_ENV"
+          echo "AAR_TEST_POSTGRES_IMAGE=docker.io/pgvector/pgvector:0.8.7-pg17" >> "$GITHUB_ENV"
+      - name: 実物の Podman での隔離（ネットワーク、読み書き、資源の上限、権限、時間切れ後の回収、PostgreSQL）
+        run: pytest -q -rA -m podman
+      - name: PostgreSQL を Podman で起動する（Compose も Docker も使わない）
+        run: |
+          python - <<'PY'
+          import psycopg
+          from aar import ctl
+          from aar.config import get_settings
+          print(ctl.postgres_up(get_settings()))
+          with psycopg.connect("postgresql://aar:aar@127.0.0.1:55432/aar", autocommit=True) as conn:
+              conn.execute("CREATE DATABASE aar_test")
+          print(*ctl.status(), sep="\n")
+          PY
+        env:
+          AAR_POSTGRES_IMAGE: docker.io/pgvector/pgvector:0.8.7-pg17
+      # 台帳の保護、操作主体の記録、再起動・保留・再開、検証用の研究の一巡を、Podman で動かした PostgreSQL に対して実行する。
+      # 一巡の中の実験は隔離なし（台本）。Podman の中での実験の実行は、上の podman の印のテストで確かめている
+      - name: 全テスト（PostgreSQL は Podman）
+        run: pytest -q -rs
+        env:
+          AAR_TEST_DATABASE_URL: postgresql://aar:aar@127.0.0.1:55432/aar_test
+      - name: 実行のあとに、実行用のコンテナが残っていない
+        run: |
+          test -z "$(podman ps --all --quiet --filter label=aar.managed=1)"
+          podman rm --force aar-postgres

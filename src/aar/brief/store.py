@@ -177,7 +177,10 @@ def checks(root: Path, b: Brief, third_party_texts: list[tuple[str, str]] | None
     add("Adaptive Card の大きさが上限以内", size <= render.TEAMS_WEBHOOK_LIMIT_BYTES, f"{size} バイト（上限 {render.TEAMS_WEBHOOK_LIMIT_BYTES}）")
     everything = "\n".join([svg, text, detail, json.dumps(payload, ensure_ascii=False)])
     secrets = [kind for kind, pat in wsmod.SECRET_PATTERNS if pat.search(everything)]
-    add("秘密情報・作業用のパスがない", not secrets, "、".join(secrets) or "検出なし（既知の形式の照合。未知の形式は見つけられない）")
+    add("秘密情報がない", not secrets, "、".join(secrets) or "検出なし（既知の形式の照合。未知の形式は見つけられない）")
+    # 作業した PC のパス（macOS・Linux・WSL のホーム、Windows のホーム、UNC）。公開前の検査と同じ照合
+    local = wsmod.find_local_path("\n".join([text, detail, json.dumps(payload, ensure_ascii=False), *b.texts()]))
+    add("作業した PC のパスがない", local is None, "検出なし" if local is None else "作業用のパスらしい記述がある（利用者名や社内の共有名が入っていないかを確かめる）")
     mails = sorted({m.group(0) for m in req._EMAIL.finditer(everything) if not req._EMAIL_OK.search(m.group(0))})
     add("メールアドレスがない", not mails, f"{len(mails)} 件" if mails else "検出なし")
     srcs = [req._Source(label, t) for label, t in (third_party_texts or []) if t and len(req._norm(t)) >= req.SOURCE_MIN_CHARS]

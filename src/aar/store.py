@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import secrets
 import subprocess
+import sys
 from datetime import UTC, datetime
 from typing import Any
 
@@ -299,13 +300,13 @@ def latest_findings(conn: psycopg.Connection, project_id: str, kind: str) -> lis
 
 def notify(conn: psycopg.Connection, project_id: str | None, level: str, title: str, body: str, key: str,
            *, macos: bool = True) -> bool:
-    """通知を保存し、初回だけ macOS の通知センターにも出す。"""
+    """通知を保存する（CLI・UI から確認できる）。macOS では、初回だけ通知センターにも出す。ほかの OS では DB だけ。"""
     row = fetch_one(
         conn,
         """INSERT INTO notifications (project_id, level, title, body, idempotency_key) VALUES (%s, %s, %s, %s, %s)
            ON CONFLICT (idempotency_key) DO NOTHING RETURNING id""",
         (project_id, level, title, body, key))
-    if row and macos:
+    if row and macos and sys.platform == "darwin":
         try:
             script = 'display notification (item 2 of argv) with title (item 1 of argv)'
             subprocess.run(["osascript", "-e", f"on run argv\n{script}\nend run", f"自律研究: {title}", body[:200]],

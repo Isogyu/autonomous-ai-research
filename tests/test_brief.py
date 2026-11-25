@@ -292,8 +292,9 @@ def test_third_party_text_and_secrets_block_review_using_the_existing_checks(tmp
         store.transition(root, bid, "submitted", AGENT)
     assert any(c["name"] == store.THIRD_PARTY and not c["ok"] and not c.get("unverified")
                for c in store.checks(root, store.read(root, bid), store.source_texts(root, bid)))   # 検出した一致は、人の申告では通らない
-    for leak, name in (("キーは sk-ant-" + "a" * 30, "秘密情報"), ("記録は /Users/someone/aar/var にある", "秘密情報"), ("連絡先は taro.yamada@corp-example.jp", "メールアドレス")):
-        root2 = _root(tmp_path / leak[:6], edit=lambda d, leak=leak: d["detail"].update(overview=leak))
+    for n, (leak, name) in enumerate((("キーは sk-ant-" + "a" * 30, "秘密情報"), ("記録は /Users/someone/aar/var にある", "作業した PC のパス"), ("ログは C:\\Users\\taro\\aar\\var にある", "作業した PC のパス"),
+                       ("置き場は \\\\fs01\\研究\\data にある", "作業した PC のパス"), ("連絡先は taro.yamada@corp-example.jp", "メールアドレス"))):
+        root2 = _root(tmp_path / f"leak{n}", edit=lambda d, leak=leak: d["detail"].update(overview=leak))
         with pytest.raises(store.BriefError, match=name):
             store.transition(root2, bid, "submitted", AGENT)
 

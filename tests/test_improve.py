@@ -114,7 +114,7 @@ def test_evaluated_code_gets_inputs_only_and_cannot_see_the_answer_key():
 def test_seatbelt_isolation_blocks_reads_writes_and_network(tmp_path):
     secret = tmp_path / "sealed" / "answers.json"
     secret.parent.mkdir()
-    secret.write_text("{}")
+    secret.write_text("{}", encoding="utf-8", newline="\n")
     probe = f'''
 import json
 def build_fix_context(findings, **kw):
@@ -175,7 +175,7 @@ def _repo(tmp_path: Path) -> tuple[Path, str]:
     repo = tmp_path / "repo"
     for rel in (TARGET.module_path, "config/policy.yaml", "src/aar/gates.py", "src/aar/improve/decide.py", "src/aar/engine/fix.py"):
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
-        (repo / rel).write_text((ROOT / rel).read_text(encoding="utf-8"), encoding="utf-8")
+        (repo / rel).write_text((ROOT / rel).read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     for args in (["init", "-q", "-b", "main"], ["config", "user.email", "t@example.com"], ["config", "user.name", "t"], ["add", "-A"],
                  ["commit", "-q", "-m", "base"]):
         subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
@@ -191,17 +191,18 @@ def _commit(repo: Path) -> str:
 def test_patch_scope_allows_only_the_target_file(tmp_path):
     repo, base = _repo(tmp_path)
     assert check_patch(repo, base, base, TARGET) == ["変更がない"]
-    (repo / TARGET.module_path).write_text(GOOD, encoding="utf-8")
+    (repo / TARGET.module_path).write_text(GOOD, encoding="utf-8", newline="\n")
     assert check_patch(repo, base, _commit(repo), TARGET) == []
     for rel, word in (("config/policy.yaml", "保護領域"), ("src/aar/gates.py", "保護領域"), ("src/aar/improve/decide.py", "保護領域"),
                       ("src/aar/engine/fix.py", "許可された範囲の外"), ("src/aar/engine/new_helper.py", "許可された範囲の外")):
         repo2, base2 = _repo(tmp_path / rel.replace("/", "_"))
-        (repo2 / rel).write_text("# changed\n", encoding="utf-8")
+        (repo2 / rel).write_text("# changed\n", encoding="utf-8", newline="\n")
         problems = check_patch(repo2, base2, _commit(repo2), TARGET)
         assert problems and word in problems[0], (rel, problems)
-    repo3, base3 = _repo(tmp_path / "mode")
-    (repo3 / TARGET.module_path).chmod(0o755)
-    assert "実行権限" in check_patch(repo3, base3, _commit(repo3), TARGET)[0]
+    if sys.platform != "win32":                      # Windows のファイルシステムは実行権限を持たない（Git も追跡しない）
+        repo3, base3 = _repo(tmp_path / "mode")
+        (repo3 / TARGET.module_path).chmod(0o755)
+        assert "実行権限" in check_patch(repo3, base3, _commit(repo3), TARGET)[0]
     repo4, base4 = _repo(tmp_path / "delete")
     (repo4 / TARGET.module_path).unlink()
     assert check_patch(repo4, base4, _commit(repo4), TARGET)
@@ -220,10 +221,10 @@ def test_protected_areas_cover_gates_evaluator_limits_and_permissions():
 def test_evaluator_fingerprint_changes_when_any_evaluator_file_changes(tmp_path):
     for rel in EVALUATOR_FILES:
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text((ROOT / rel).read_text(encoding="utf-8"), encoding="utf-8")
+        (tmp_path / rel).write_text((ROOT / rel).read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     before = evaluator_sha256(tmp_path)
     assert before == evaluator_sha256(ROOT)
-    (tmp_path / "src/aar/improve/decide.py").write_text((ROOT / "src/aar/improve/decide.py").read_text(encoding="utf-8").replace("0.90", "0.10"))
+    (tmp_path / "src/aar/improve/decide.py").write_text((ROOT / "src/aar/improve/decide.py").read_text(encoding="utf-8").replace("0.90", "0.10"), encoding="utf-8", newline="\n")
     assert evaluator_sha256(tmp_path) != before                                            # 採否の基準を緩めると、評価器のハッシュが変わる
 
 
@@ -243,12 +244,12 @@ def test_cases_keep_copies_of_one_study_in_one_group(tmp_path):
     for project, prereg in (("RP-1", "A"), ("FX-1", "A"), ("RP-2", "B")):
         base = tmp_path / project
         (base / "repo" / "prereg").mkdir(parents=True)
-        (base / "repo" / "prereg" / "cycle1.json").write_text(prereg)
+        (base / "repo" / "prereg" / "cycle1.json").write_text(prereg, encoding="utf-8", newline="\n")
         fix, audit = base / "audits" / "fix-research-round1", base / "audits" / "research-round1" / "audit"
         fix.mkdir(parents=True)
         audit.mkdir(parents=True)
-        (fix / "handed_findings.json").write_text(json.dumps([{"issue_id": "I001", "severity": "Major", "title": "t", "claim_ids": "C001"}]))
-        (audit / "claims.csv").write_text("claim_id,claim_text,status,limitations\nC001,主張の本文がここにある,Verified,\n", encoding="utf-8")
+        (fix / "handed_findings.json").write_text(json.dumps([{"issue_id": "I001", "severity": "Major", "title": "t", "claim_ids": "C001"}]), encoding="utf-8", newline="\n")
+        (audit / "claims.csv").write_text("claim_id,claim_text,status,limitations\nC001,主張の本文がここにある,Verified,\n", encoding="utf-8", newline="\n")
     cases = ek.cases_from_records(tmp_path, BUDGET)
     groups = {c["id"].split(":")[1]: c["group"] for c in cases}
     assert groups["RP-1"] == groups["FX-1"] != groups["RP-2"] and all(c["key"]["refs"] == {"C001": "主張の本文がここにある"} for c in cases)
@@ -269,20 +270,20 @@ def improve_env(db_url, tmp_path, monkeypatch):
     repo, base = _repo(tmp_path / "platform")
     for rel in EVALUATOR_FILES:
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
-        (repo / rel).write_text((ROOT / rel).read_text(encoding="utf-8"), encoding="utf-8")
+        (repo / rel).write_text((ROOT / rel).read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     base = _commit(repo)
     ws = tmp_path / "workspaces"
     for project, prereg, n in (("RP-A", "A", 3), ("RP-B", "B", 1)):
         (ws / project / "repo" / "prereg").mkdir(parents=True)
-        (ws / project / "repo" / "prereg" / "cycle1.json").write_text(prereg)
+        (ws / project / "repo" / "prereg" / "cycle1.json").write_text(prereg, encoding="utf-8", newline="\n")
         for r in range(1, n + 1):
             fix, audit = ws / project / "audits" / f"fix-research-round{r}", ws / project / "audits" / f"research-round{r}" / "audit"
             fix.mkdir(parents=True)
             audit.mkdir(parents=True)
             (fix / "handed_findings.json").write_text(json.dumps(
-                [{"issue_id": "I001", "severity": "Major", "title": f"指摘{r}", "claim_ids": "C001;C002", "observed": "x"}], ensure_ascii=False))
+                [{"issue_id": "I001", "severity": "Major", "title": f"指摘{r}", "claim_ids": "C001;C002", "observed": "x"}], ensure_ascii=False), encoding="utf-8", newline="\n")
             (audit / "claims.csv").write_text(f"claim_id,claim_text,status,limitations\nC001,主張1の本文 {project}{r} です,Verified,\n"
-                                              f"C002,主張2の本文 {project}{r} です,Contradicted,\nC003,参照されない主張の本文,Verified,\n", encoding="utf-8")
+                                              f"C002,主張2の本文 {project}{r} です,Contradicted,\nC003,参照されない主張の本文,Verified,\n", encoding="utf-8", newline="\n")
     monkeypatch.setenv("AAR_DATABASE_URL", db_url)
     monkeypatch.setenv("AAR_DATA_DIR", str(tmp_path / "var"))
     monkeypatch.setenv("AAR_WORKSPACES_DIR", str(ws))
@@ -297,10 +298,10 @@ def _write_candidate(conn, cid: str, plan_id: int, source: str, actor, extra: di
     from aar.improve import loop
 
     clone = loop.prepare_clone(conn, cid, plan_id)
-    (clone / TARGET.module_path).write_text(source, encoding="utf-8")
+    (clone / TARGET.module_path).write_text(source, encoding="utf-8", newline="\n")
     for rel, text in (extra or {}).items():
         (clone / rel).parent.mkdir(parents=True, exist_ok=True)
-        (clone / rel).write_text(text, encoding="utf-8")
+        (clone / rel).write_text(text, encoding="utf-8", newline="\n")
     return loop.register_patch(conn, cid, actor)
 
 
@@ -323,12 +324,12 @@ def test_full_cycle_records_plan_runs_decision_and_actors_without_touching_sourc
         assert base_runs["sealed"]["metrics"]["ref_resolution_micro"] == 0.0
         assert not loop.run_baseline(conn, plan["id"], actor, commit=improve_env["base"])["sealed"]["created"]   # 再開しても重ねない
 
-        dev = json.loads((loop.candidate_dir(cand["id"]) / "repo" / ".improve_task" / "dev_cases.json").read_text()) \
+        dev = json.loads((loop.candidate_dir(cand["id"]) / "repo" / ".improve_task" / "dev_cases.json").read_text(encoding="utf-8")) \
             if (loop.candidate_dir(cand["id"]) / "repo").exists() else None
         assert dev is None
         reg = _write_candidate(conn, cand["id"], plan["id"], GOOD, actor)
         assert reg["problems"] == []
-        handed = json.loads((loop.candidate_dir(cand["id"]) / "repo" / ".improve_task" / "dev_cases.json").read_text())
+        handed = json.loads((loop.candidate_dir(cand["id"]) / "repo" / ".improve_task" / "dev_cases.json").read_text(encoding="utf-8"))
         held_back = loop._plan_cases(plan, "sealed") + loop._plan_cases(plan, "select")
         # 候補を作る側に渡るのは、開発用の課題だけ（ID も、入力の中身も重ならない）
         assert handed and not ({c["id"] for c in handed} & {c["id"] for c in held_back})
@@ -398,12 +399,12 @@ def test_tampering_with_cases_or_evaluator_is_detected(improve_env):
         cases = loop.workdir() / "plans" / plan["plan_sha256"] / "cases.json"
         cases.chmod(0o600)
         original = cases.read_text(encoding="utf-8")
-        cases.write_text(original.replace("主張1の本文", "書き換えた正解"), encoding="utf-8")
+        cases.write_text(original.replace("主張1の本文", "書き換えた正解"), encoding="utf-8", newline="\n")
         with pytest.raises(RuntimeError, match="課題が"):
             loop.run_baseline(conn, plan["id"], actor, commit=improve_env["base"])         # 期待結果の改変
-        cases.write_text(original, encoding="utf-8")
+        cases.write_text(original, encoding="utf-8", newline="\n")
         decide_py = improve_env["repo"] / "src/aar/improve/decide.py"
-        decide_py.write_text(decide_py.read_text(encoding="utf-8").replace('"min_level": 0.90', '"min_level": 0.10'), encoding="utf-8")
+        decide_py.write_text(decide_py.read_text(encoding="utf-8").replace('"min_level": 0.90', '"min_level": 0.10'), encoding="utf-8", newline="\n")
         run = loop.run_baseline(conn, plan["id"], actor, commit=improve_env["base"])["sealed"]
         assert run["status"] == "failed" and run["failure_kind"] == "evaluator_changed"     # 採否の基準の改変
     with connect() as conn:
@@ -441,7 +442,7 @@ def test_actor_is_required_and_generation_respects_limits_and_resume(improve_env
         async def run(self, prompt, *, cwd, **kw):
             calls.append("writes")
             assert (Path(cwd) / ".improve_task" / "task.md").exists() and Path(cwd) != improve_env["repo"]      # 稼働中のチェックアウトではない
-            (Path(cwd) / TARGET.module_path).write_text(GOOD, encoding="utf-8")
+            (Path(cwd) / TARGET.module_path).write_text(GOOD, encoding="utf-8", newline="\n")
             return AgentResult(ok=True, agent="claude", model="sonnet", cost_usd=0.12, session_id="s1")
 
     with connect() as conn:
@@ -474,3 +475,32 @@ def test_areas_and_sources_register_reading_level(db_url, monkeypatch):
         assert len(rows) == 12 and not [r for r in rows if r["kind"] == "paper" and r["read_level"] != "abstract"]   # 要旨だけの論文を、読了としない
         assert all(a["reject_conditions"] and a["comparison"] for a in fetch_all(conn, "SELECT * FROM improvement_areas"))
     config.get_settings.cache_clear()
+
+
+def test_application_role_cannot_rewrite_or_unprotect_the_ledger(db_url):
+    """実行用の役割（aar_app）では、追記だけの表を書き換えられず、保護そのもの（トリガー）も外せない。"""
+    import psycopg
+    from psycopg import conninfo
+    from psycopg.types.json import Jsonb
+
+    from aar.db.core import APPEND_ONLY_TABLES, pending_migrations, setup_app_role
+
+    out = setup_app_role(db_url, "app-pw-for-test")
+    assert setup_app_role(db_url, "app-pw-for-test")["created"] is False and sorted(out["append_only"]) == sorted(APPEND_ONLY_TABLES)
+    app_url = conninfo.make_conninfo(db_url, user="aar_app", password="app-pw-for-test")
+    assert pending_migrations(app_url) == []                                   # 実行用の役割でも、移行の状態は読める
+    with psycopg.connect(app_url, autocommit=True) as conn:
+        assert conn.execute("SELECT current_user").fetchone()[0] == "aar_app"
+        conn.execute("INSERT INTO improvement_events (event, actor_kind, actor_detail, detail) VALUES ('probe', 'human', 't', %s)", (Jsonb({}),))
+        for stmt in ("UPDATE improvement_events SET event = 'x'", "DELETE FROM improvement_events", "TRUNCATE improvement_events",
+                     "ALTER TABLE improvement_events DISABLE TRIGGER ALL", "DROP TRIGGER improvement_events_append_only ON improvement_events",
+                     "DROP TABLE improvement_events", "ALTER TABLE improvement_runs DISABLE TRIGGER improvement_runs_append_only",
+                     "CREATE OR REPLACE FUNCTION improvement_append_only() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql",
+                     "UPDATE schema_migrations SET sha256 = 'x'", "CREATE TABLE sneaky (x int)", "SET ROLE aar"):
+            with pytest.raises(psycopg.Error):
+                conn.execute(stmt)
+        assert conn.execute("SELECT count(*) FROM improvement_events WHERE event = 'probe'").fetchone()[0] == 1
+        conn.execute("UPDATE improvement_candidates SET status = status")       # 状態を持つ表は、従来どおり更新できる
+    with psycopg.connect(db_url, autocommit=True) as conn:                     # 所有者でも、UPDATE と DELETE はトリガーが拒否する
+        with pytest.raises(psycopg.Error):
+            conn.execute("UPDATE improvement_events SET event = 'x'")

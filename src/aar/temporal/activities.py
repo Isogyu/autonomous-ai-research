@@ -239,7 +239,7 @@ async def design_and_preregister(project_id: str, cycle: int, previous: dict[str
                     # 見たことのないデータで設計を固定しないよう、形式（ファイルの一覧・行数・先頭の数行）を見せて設計を確定させる
                     preview = ds.preview_files(ctx.ws, fetched["files"])
                     (ctx.ws / ds.EXTERNAL_DIR / "PREVIEW.md").write_text(
-                        "# 外部データの形式の下見（取得時に自動で作成。第三者のデータの抜粋なので、Git には入れない）\n\n" + preview + "\n", encoding="utf-8")
+                        "# 外部データの形式の下見（取得時に自動で作成。第三者のデータの抜粋なので、Git には入れない）\n\n" + preview + "\n", encoding="utf-8", newline="\n")
                     with connect() as conn:
                         store.log_event(conn, project_id, project_id, "dataset_previewed",
                                         {"cycle": cycle, "files": [f["filename"] for f in fetched["files"]], "chars": len(preview)})
@@ -344,7 +344,7 @@ async def analyze_results(project_id: str, cycle: int, run_no: int, elapsed_hour
         verdicts = native.final_verdicts(analysis, crit, labels)
         (ctx.ws / "docs" / "critique").mkdir(parents=True, exist_ok=True)
         (ctx.ws / "docs" / "critique" / f"cycle{cycle}.json").write_text(
-            json.dumps({"critique": crit, "verdicts": verdicts}, ensure_ascii=False, indent=2), encoding="utf-8")
+            json.dumps({"critique": crit, "verdicts": verdicts}, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
         commit = wsmod.commit_all(ctx.ws, f"分析と批判的検討（サイクル{cycle}、{run_no}回目）")
         with connect() as conn:
             exp_id = store.upsert_experiment(conn, project_id, cycle, "main", f"main-{run_no}", status="completed",
@@ -753,7 +753,7 @@ def _write_required_record(report: Any) -> None:
     try:
         (d / "required_checks.json").write_text(json.dumps(
             {"deterministic": report.detail.get("required_checks"), "auditor": report.detail.get("required_attestation"),
-             "disagreements": report.detail.get("required_disagreements")}, ensure_ascii=False, indent=2), encoding="utf-8")
+             "disagreements": report.detail.get("required_disagreements")}, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
         pubaudit._write_record(d, report, None)
     except OSError:
         pass
@@ -827,7 +827,7 @@ async def submit_candidate(project_id: str, round_no: int = 0) -> dict[str, Any]
         final = await asyncio.to_thread(_final_check, project_id, ctx.ws, final_commit)
         with connect() as conn:
             store.log_event(conn, project_id, project_id, "final_check", final)
-        (audit_root_of(project_id) / "final_check.json").write_text(json.dumps(final, ensure_ascii=False, indent=2), encoding="utf-8")
+        (audit_root_of(project_id) / "final_check.json").write_text(json.dumps(final, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
         if final["problems"]:
             blocked = {"status": "blocked", "reason": "; ".join(final["problems"])[:600], "final_check": final}
             with connect() as conn:
@@ -848,7 +848,7 @@ async def submit_candidate(project_id: str, round_no: int = 0) -> dict[str, Any]
                              research_gate=rg["checks"] if rg else [], publication_gate=pg["checks"] if pg else [],
                              audit_summary=ar["summary"] if ar else "", score=float(pa["score"]) if pa and pa["score"] is not None else None,
                              mode=project["execution_mode"])
-        (ctx.ws.parent / "pr_body.md").write_text(body, encoding="utf-8")
+        (ctx.ws.parent / "pr_body.md").write_text(body, encoding="utf-8", newline="\n")
         if project["execution_mode"] == "mock":
             result: dict[str, Any] = {"status": "skipped", "reason": "モック実行の結果は GitHub に出さない"}
         else:
@@ -927,7 +927,7 @@ async def mark_hold(project_id: str, kind: str, message: str, seq: int) -> None:
                           outcome_reason=f"[{kind}] {message}"[:1000])
         store.log_event(conn, project_id, project_id, "on_hold", {"kind": kind, "message": message}, key=f"{project_id}:hold:{seq}")
         title = {"auth": "認証が必要", "budget": "費用上限に到達", "policy_changed": "方針ファイルが変更された",
-                 "rate_limit": "利用上限のため待機", "setup": "設定が不足", "resource": "ディスクの空きが不足", "paused": "一時停止", "host_sleep": "PC のスリープで時間切れ", "prereg_changed": "事前登録が変更された"}.get(kind, "保留")
+                 "rate_limit": "利用上限のため待機", "setup": "設定が不足", "resource": "ディスクの空きが不足", "paused": "一時停止", "host_sleep": "PC のスリープで時間切れ", "host_sleep_unknown": "失敗の原因を判定できない（電源の記録が読めない）", "prereg_changed": "事前登録が変更された"}.get(kind, "保留")
         key = f"{project_id}:hold:{seq}"
         if kind == "rate_limit":
             # 同じ解除待ちのあいだは、待ち直すたびに通知しない（解除の見込み時刻が変わったとき、人の操作が要るときだけ）
@@ -948,8 +948,11 @@ async def host_sleep_check(project_id: str, phase: str, since_iso: str, retries:
     from aar import limits
 
     since = dt.datetime.fromisoformat(since_iso)
-    seconds = await asyncio.to_thread(limits.host_sleep_seconds, since)
-    out = {"phase": phase, "since": since_iso, "slept_seconds": seconds, "slept": seconds >= HOST_SLEEP_MIN_S, "retries": retries}
+    ev = await asyncio.to_thread(limits.host_sleep_evidence, since)
+    # evidence: slept / awake / unknown。電源の記録を読めなかった場合（unknown）を「スリープなし」とは記録しない
+    out = {"phase": phase, "since": since_iso, "slept_seconds": ev.seconds, "slept": ev.seconds >= HOST_SLEEP_MIN_S, "retries": retries,
+           "evidence": ev.status, "source": ev.source, "detail": ev.detail,
+           "hold_unknown": ev.status == "unknown" and get_settings().hold_on_unknown_sleep}
     with connect() as conn:
         store.log_event(conn, project_id, project_id, "host_sleep_check", out)
     return out
