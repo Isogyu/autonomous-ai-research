@@ -442,4 +442,16 @@ class ProposalWorkflow:
         return {"batch_key": batch_key, "candidates": len(papers), "created": created, "skipped": skipped}
 
 
-ALL_WORKFLOWS = [ResearchWorkflow, IngestWorkflow, ProposalWorkflow]
+@workflow.defn
+class ImprovementWorkflow:
+    """基盤の改善の 1 巡（定期の実行。既定は登録しない）。採用候補を出すところまでで、基盤には反映しない。"""
+
+    @workflow.run
+    async def run(self) -> dict[str, Any]:
+        # 再試行しない: 途中で止まっても、次の巡が続きから進める。同じ巡を繰り返して、モデルを余計に呼ばない
+        return await workflow.execute_activity(
+            "improvement_cycle", start_to_close_timeout=timedelta(hours=3), heartbeat_timeout=timedelta(minutes=5),
+            retry_policy=RetryPolicy(maximum_attempts=1))
+
+
+ALL_WORKFLOWS = [ResearchWorkflow, IngestWorkflow, ProposalWorkflow, ImprovementWorkflow]

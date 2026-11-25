@@ -32,6 +32,13 @@ TARGETS: dict[str, Target] = {
         entry="build_fix_context",
         allowed_paths=("src/aar/engine/fix_context.py",),
     ),
+    "log_excerpt": Target(
+        name="log_excerpt",
+        description="実験・テスト・分析が失敗したときに渡す、ログの抜粋の作り方",
+        module_path="src/aar/engine/log_excerpt.py",
+        entry="build_excerpt",
+        allowed_paths=("src/aar/engine/log_excerpt.py",),
+    ),
 }
 
 # 候補が変更できない領域（リポジトリのルートからのパターン）
@@ -48,6 +55,7 @@ PROTECTED: tuple[str, ...] = (
 # 評価の比較可能性を決めるファイル。内容のハッシュを評価計画に固定し、実行のたびに確かめる
 EVALUATOR_FILES: tuple[str, ...] = (
     "src/aar/improve/targets.py", "src/aar/improve/evalkit.py", "src/aar/improve/child.py", "src/aar/improve/decide.py",
+    "src/aar/improve/spec_log_excerpt.py",
 )
 
 

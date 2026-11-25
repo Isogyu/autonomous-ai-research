@@ -252,6 +252,10 @@ async def ensure_schedules() -> list[str]:
                                  ScheduleCalendarSpec(day_of_week=[ScheduleRange(1)], hour=[ScheduleRange(7)], minute=[ScheduleRange(30)]),
                                  timedelta(days=3)),
     }
+    if get_settings().improve_auto:               # 既定は無効。有効にしたときだけ、週に 1 回の改善の 1 巡を登録する
+        specs["aar-weekly-improvement"] = ("ImprovementWorkflow",
+                                           ScheduleCalendarSpec(day_of_week=[ScheduleRange(3)], hour=[ScheduleRange(8)], minute=[ScheduleRange(30)]),
+                                           timedelta(days=3))
     created = []
     for sid, (wf, cal, catchup) in specs.items():
         try:

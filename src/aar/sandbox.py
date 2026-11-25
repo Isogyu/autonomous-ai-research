@@ -36,7 +36,11 @@ class RunResult(BaseModel):
     sandbox: str = ""
 
     def tail(self, n: int = 3000) -> str:
-        return (self.stdout[-n:] + ("\n--- stderr ---\n" + self.stderr[-n:] if self.stderr.strip() else "")).strip()
+        from aar.engine.log_excerpt import (
+            build_excerpt,  # 抜粋の作り方は、改善の対象（比較評価を通して変える）
+        )
+
+        return build_excerpt(self.stdout, self.stderr, budget_chars=n)
 
 
 # 秘密情報を読ませない場所（seatbelt 用）

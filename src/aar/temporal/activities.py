@@ -1111,7 +1111,28 @@ async def notify_proposals(batch_key: str, created: int, skipped: list[str]) -> 
                      macos=bool(load_policy().notify.get("macos", True)))
 
 
-ALL_ACTIVITIES = [
+@activity.defn
+async def improvement_cycle() -> dict[str, Any]:
+    """基盤の改善の 1 巡。評価は時間がかかるので、別のスレッドで進め、その間も生存の合図を送る。"""
+    from aar.improve import auto
+    from aar.improve.ledger import Actor
+
+    settings, choice = get_settings(), load_policy().research.models["implementer"]
+    runner = runners_for(settings.mode)[choice.agent]
+
+    def work() -> dict[str, Any]:
+        with connect() as conn:
+            return asyncio.run(auto.run_cycle(conn, Actor("scheduler", "aar.improve.auto"), runner, model=choice.model))
+
+    task = asyncio.ensure_future(asyncio.to_thread(work))
+    while not task.done():
+        activity.heartbeat()
+        await asyncio.wait({task}, timeout=30)
+    out = task.result()
+    return {k: out[k] for k in ("plans", "generated", "decided", "stopped")} | {"adopt_candidates": [a["id"] for a in out["adopt_candidates"]]}
+
+
+ALL_ACTIVITIES = [improvement_cycle, 
     prepare_project, understand_paper, design_and_preregister, implement_experiment, run_pilot, run_main_experiment,
     analyze_results, research_audit, fix_audit_findings, build_deliverables, publication_audit, refresh_deliverables, host_sleep_check,
     submit_candidate, finalize_project, mark_hold, mark_resumed, rate_limit_wait, set_budget, ingest_papers, select_candidates,
