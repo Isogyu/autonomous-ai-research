@@ -11,13 +11,16 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
+import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import psycopg
 
-from aar.config import get_settings
+from aar.config import display_tz, get_settings
 from aar.db.core import connect, fetch_one
 from aar.models import AgentResult
 
@@ -88,12 +91,13 @@ def wait_plan(conn: psycopg.Connection, project_id: str, now: dt.datetime | None
     # 見込み時刻より手前で起きると、もう1回待ち直すことになるので、切り上げて少し足す
     seconds = max(int((until - now).total_seconds()) + 2 + (stagger if floor >= 60 else 0), floor)
     return {"seconds": seconds, "until": until.isoformat(timespec="seconds"),
-            "until_local": until.astimezone().strftime("%m-%d %H:%M"),
+            "until_local": fmt_local(until),
             "providers": [r["provider"] for r in rows], "source": rows[0]["source"] if rows else "backoff"}
 
 
 def fmt_local(t: dt.datetime) -> str:
-    return t.astimezone().strftime("%m-%d %H:%M")
+    """表示用の時刻（設定したタイムゾーン。未設定なら OS の設定）。保存する時刻は UTC のまま。"""
+    return t.astimezone(display_tz()).strftime("%m-%d %H:%M")
 
 
 class GuardedRunner:
@@ -144,12 +148,106 @@ def parse_sleep_seconds(log_text: str, since: dt.datetime, until: dt.datetime) -
     return int(total)
 
 
-def host_sleep_seconds(since: dt.datetime, until: dt.datetime | None = None) -> int:
-    """期間内に、この PC がスリープしていた秒数（macOS だけ。調べられなければ 0）。"""
+# Windows: システムのイベントログ（Kernel-Power）。42 = スリープに入る、107 = スリープから復帰、
+# 506 = モダンスタンバイに入る、507 = モダンスタンバイから出る。画面のロックや画面の消灯は、これらのイベントを出さない
+_WIN_SLEEP_IDS, _WIN_WAKE_IDS = {42, 506}, {107, 507}
+
+
+def parse_windows_power_events(xml_text: str, since: dt.datetime, until: dt.datetime) -> int:
+    """`wevtutil qe System … /f:xml` の出力から、期間内にスリープしていた秒数を数える。"""
+    import re
+
+    events = []
+    for block in re.findall(r"<Event\b.*?</Event>", xml_text, flags=re.S):
+        eid = re.search(r"<EventID[^>]*>(\d+)</EventID>", block)
+        at = re.search(r"<TimeCreated\s+SystemTime=['\"]([^'\"]+)['\"]", block)
+        if not eid or not at:
+            continue
+        stamp = re.sub(r"(\.\d{6})\d*", r"\1", at.group(1)).replace("Z", "+00:00")
+        try:
+            events.append((dt.datetime.fromisoformat(stamp), int(eid.group(1))))
+        except ValueError:
+            continue
+    asleep_from: dt.datetime | None = None
+    total = 0.0
+    for at, eid in sorted(events):
+        if eid in _WIN_SLEEP_IDS:
+            asleep_from = asleep_from or at
+        elif eid in _WIN_WAKE_IDS and asleep_from is not None:
+            total += max(0.0, (min(at, until) - max(asleep_from, since)).total_seconds())
+            asleep_from = None
+    if asleep_from is not None:
+        total += max(0.0, (until - max(asleep_from, since)).total_seconds())
+    return int(total)
+
+
+@dataclass(frozen=True)
+class SleepEvidence:
+    """期間内にホストがスリープしていたかの証拠。調べられなかった場合は unknown で、「スリープなし」とは扱わない。"""
+
+    status: str             # "slept"（スリープの記録がある）/ "awake"（記録を読めて、スリープがない）/ "unknown"（調べられない）
+    seconds: int
+    source: str
+    detail: str = ""
+
+
+def _is_wsl() -> bool:
+    import platform
+
+    return sys.platform == "linux" and "microsoft" in platform.release().lower()
+
+
+def _windows_power_log(since: dt.datetime) -> tuple[str | None, str]:
+    """Windows のイベントログから電源のイベントを読む。WSL の中からは、Windows 側の wevtutil.exe を呼ぶ。"""
+    import shutil
     import subprocess
 
+    exe = shutil.which("wevtutil.exe") or shutil.which("wevtutil")
+    if not exe and _is_wsl():
+        cand = "/mnt/c/Windows/System32/wevtutil.exe"
+        exe = cand if os.path.exists(cand) else None
+    if not exe:
+        return None, "wevtutil が見つからない"
+    stamp = since.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    ids = " or ".join(f"EventID={i}" for i in sorted(_WIN_SLEEP_IDS | _WIN_WAKE_IDS))
+    query = f"*[System[Provider[@Name='Microsoft-Windows-Kernel-Power'] and ({ids}) and TimeCreated[@SystemTime>='{stamp}']]]"
     try:
-        out = subprocess.run(["pmset", "-g", "log"], capture_output=True, text=True, timeout=60, check=False).stdout
-    except (OSError, subprocess.SubprocessError):
-        return 0
-    return parse_sleep_seconds(out, since, until or dt.datetime.now(dt.UTC))
+        r = subprocess.run([exe, "qe", "System", f"/q:{query}", "/f:xml", "/rd:false"], capture_output=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, f"wevtutil を実行できない: {e}"
+    if r.returncode != 0:
+        return None, f"wevtutil が失敗（終了コード {r.returncode}）: {r.stderr.decode('utf-8', 'replace').strip()[:200]}"
+    return r.stdout.decode("utf-8", "replace"), ""
+
+
+def host_sleep_evidence(since: dt.datetime, until: dt.datetime | None = None) -> SleepEvidence:
+    """期間内に、この PC（ホスト）がスリープしていたかを、OS の電源の記録で調べる。
+
+    調べるのはホストのスリープだけ。処理の遅れや時刻の飛びからは推定しない。WSL や Podman の仮想環境だけが止まった場合は、
+    ホストの電源の記録には現れない（別の事象として扱う）。電源の設定は読むだけで、変更しない。
+    """
+    import subprocess
+
+    until = until or dt.datetime.now(dt.UTC)
+    if sys.platform == "darwin":
+        try:
+            r = subprocess.run(["pmset", "-g", "log"], capture_output=True, text=True, timeout=60, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            return SleepEvidence("unknown", 0, "pmset", str(e)[:200])
+        if r.returncode != 0 or not r.stdout.strip():
+            return SleepEvidence("unknown", 0, "pmset", f"終了コード {r.returncode}")
+        seconds = parse_sleep_seconds(r.stdout, since, until)
+        return SleepEvidence("slept" if seconds > 0 else "awake", seconds, "pmset")
+    if sys.platform == "win32" or _is_wsl():
+        source = "wevtutil（Kernel-Power 42/107/506/507）" + ("、WSL から Windows 側を参照" if _is_wsl() else "")
+        text, problem = _windows_power_log(since)
+        if text is None:
+            return SleepEvidence("unknown", 0, source, problem)
+        seconds = parse_windows_power_events(text, since, until)
+        return SleepEvidence("slept" if seconds > 0 else "awake", seconds, source)
+    return SleepEvidence("unknown", 0, "なし", "この OS では、ホストの電源の記録を読む方法を実装していない")
+
+
+def host_sleep_seconds(since: dt.datetime, until: dt.datetime | None = None) -> int:
+    """期間内に、この PC がスリープしていた秒数。調べられなかった場合も 0 を返すので、判定には host_sleep_evidence を使う。"""
+    return host_sleep_evidence(since, until).seconds

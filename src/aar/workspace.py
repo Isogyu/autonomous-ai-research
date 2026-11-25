@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -22,11 +23,17 @@ __pycache__/
 """
 
 
+# 利用者のフックを使わない（Windows では /dev/null がないので、OS の空デバイスを指す）。
+# 改行を変換しない: 事前登録や生データはバイト列のハッシュで固定するので、OS によって内容が変わってはいけない。
+GIT_SAFE = ["-c", f"core.hooksPath={os.devnull}", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false",
+            "-c", "core.safecrlf=false", "-c", "core.quotepath=false", "-c", "core.longpaths=true"]
+
+
 def git(ws: Path, *args: str, check: bool = True) -> str:
     """作業領域で git を実行する。利用者のグローバル設定やフックの影響を受けないようにする。"""
     r = subprocess.run(
-        ["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", *args],
-        cwd=ws, capture_output=True, text=True, timeout=120,
+        ["git", *GIT_SAFE, *args],
+        cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
     )
     if check and r.returncode != 0:
         raise RuntimeError(f"git {' '.join(args[:2])} が失敗: {r.stderr.strip()[-400:]}")
@@ -41,7 +48,7 @@ def init_workspace(ws: Path, *, author_name: str, author_email: str, base_branch
     ws.parent.mkdir(parents=True, exist_ok=True)
     if clone_from:
         # 元のリポジトリは読むだけ。複製先の origin は外し、誤って元へ push しないようにする
-        subprocess.run(["git", "clone", "--no-hardlinks", str(clone_from), str(ws)], check=True,
+        subprocess.run(["git", "-c", "core.autocrlf=false", "clone", "--no-hardlinks", str(clone_from), str(ws)], check=True,
                        capture_output=True, timeout=600)
         git(ws, "remote", "remove", "origin", check=False)
     else:
@@ -50,7 +57,7 @@ def init_workspace(ws: Path, *, author_name: str, author_email: str, base_branch
     git(ws, "config", "user.name", author_name)
     git(ws, "config", "user.email", author_email)
     if not clone_from:
-        (ws / ".gitignore").write_text(GITIGNORE)
+        (ws / ".gitignore").write_text(GITIGNORE, encoding="utf-8", newline="\n")
         git(ws, "add", ".gitignore")
         git(ws, "commit", "-m", "作業領域を初期化")
 
@@ -100,7 +107,7 @@ def register_prereg(ws: Path, cycle: int, content: dict[str, Any]) -> tuple[str,
         return sha, commit
     path.parent.mkdir(exist_ok=True)
     text = canonical_json(content)
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="\n")
     sha = hashlib.sha256(text.encode()).hexdigest()
     git(ws, "add", prereg_path(cycle))
     git(ws, "commit", "-m", f"事前登録（サイクル{cycle}）: 仮説・指標・分割・解析・判定基準を固定", "--", prereg_path(cycle))
@@ -133,6 +140,35 @@ def verify_prereg(ws: Path, cycle: int, expected_sha: str, expected_commit: str 
 
 # ------------------------------------------------------------------ 秘密情報の検査
 
+# 作業した PC のパス（利用者名や社内の共有名が入る）。公開候補とログに残さない。
+#   macOS / Linux・WSL のホーム、Windows のホーム（区切りは \、/、JSON で二重になった \\ のどれでも）、
+#   WSL から見た Windows のホーム（/mnt/c/Users/…）、UNC（\\server\share\…、\\wsl.localhost\…、\\wsl$\…）
+_SEP = r"(?:\\{1,2}|/)"
+_NAME = r"[^\\/:*?\"<>|\r\n]+?"                      # 利用者名や共有名（空白や日本語を含むことがある）
+_I = re.IGNORECASE
+LOCAL_PATH_PATTERNS: list[tuple[re.Pattern[str], str]] = [   # 長い形を先に置き換える
+    (re.compile(rf"(?<![A-Za-z0-9])[A-Za-z]:{_SEP}Users{_SEP}{_NAME}{_SEP}", _I), "~/"),
+    (re.compile(r"(?<![A-Za-z0-9._/\-])/mnt/[a-z]/Users/[^/\r\n\"']+/", _I), "~/"),
+    (re.compile(rf"(?<![\\\w])\\{{2,4}}(?:wsl\.localhost|wsl\$){_SEP}{_NAME}{_SEP}(?:home{_SEP}{_NAME}{_SEP})?", _I), "<WSL>/"),
+    (re.compile(r"(?<![\\\w])\\{2,4}[A-Za-z0-9][A-Za-z0-9.\-]*\\{1,2}[^\\/:*?\"<>|\r\n{}]+?\\{1,2}"), "<UNC>/"),
+    (re.compile(r"/Users/[A-Za-z0-9_.\-]+/"), "~/"),
+    (re.compile(r"(?<![A-Za-z0-9._/\-])/home/[A-Za-z0-9_.\-]+/"), "~/"),
+]
+
+
+def find_local_path(text: str) -> re.Match[str] | None:
+    """作業した PC のパスらしい最初の箇所。"""
+    found = [m for m in (pat.search(text) for pat, _ in LOCAL_PATH_PATTERNS) if m]
+    return min(found, key=lambda m: m.start()) if found else None
+
+
+def redact_local_paths(text: str) -> str:
+    """作業した PC のパスを、場所の分からない表記に置き換える（公開用の写しにだけ使う。原本には使わない）。"""
+    for pat, repl in LOCAL_PATH_PATTERNS:
+        text = pat.sub(lambda _m, r=repl: r, text)
+    return text
+
+
 SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("Anthropic API キー", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
     ("OpenAI API キー", re.compile(r"sk-(?:proj-)?[A-Za-z0-9_\-]{32,}")),
@@ -142,7 +178,6 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("Slack トークン", re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}")),
     ("Hugging Face トークン", re.compile(r"\bhf_[A-Za-z0-9]{30,}\b")),
     ("汎用の秘密の代入", re.compile(r"""(?i)\b(?:api[_-]?key|secret|token|password|passwd)\b\s*[:=]\s*['"][A-Za-z0-9_\-/+=]{16,}['"]""")),
-    ("利用者のホームのパス", re.compile(r"/Users/[A-Za-z0-9_.\-]+/")),
 ]
 _SECRET_FILENAMES = re.compile(r"(^|/)(\.env(\..+)?|.*\.pem|id_rsa|id_ed25519|auth\.json|credentials\.json|\.netrc)$")
 
@@ -166,9 +201,12 @@ def scan_secrets(ws: Path, *, include_history: bool = True) -> list[dict[str, st
             if m:
                 line = text.count("\n", 0, m.start()) + 1
                 hits.append({"path": f"{rel}:{line}", "kind": kind, "where": "tracked"})
+        m = find_local_path(text)                    # パスの検査は現在のファイルだけ（履歴は見ない）
+        if m:
+            hits.append({"path": f"{rel}:{text.count(chr(10), 0, m.start()) + 1}", "kind": "利用者のホームのパス", "where": "tracked"})
     if include_history:
         log = git(ws, "log", "-p", "--all", "--no-color", "--unified=0", check=False)
-        for kind, pat in SECRET_PATTERNS[:-1]:   # パスの検査は現在のファイルだけ
+        for kind, pat in SECRET_PATTERNS:
             added = "\n".join(line for line in log.splitlines() if line.startswith("+"))
             if pat.search(added) and not any(h["kind"] == kind for h in hits):
                 hits.append({"path": "(過去のコミット)", "kind": kind, "where": "history"})

@@ -310,7 +310,7 @@ async def run_skill_audit(
     audit_dir.mkdir(parents=True)
     commit = snapshot_target_full(ws, target)
     prompt = build_skill_prompt(skill_dir, target, mech, round_no, prior_issues)
-    (audit_dir / "prompt.md").write_text(prompt, encoding="utf-8")
+    (audit_dir / "prompt.md").write_text(prompt, encoding="utf-8", newline="\n")
     log_path = audit_dir / "execution_log.jsonl"
     # 読み取り専用で実行する（Skill の audit モード）。対象にも作業場所にも書き込めない
     res = await runner.run(prompt, cwd=target, model=model, schema=SKILL_SCHEMA, writable=False, timeout_s=timeout_s,
@@ -376,8 +376,8 @@ def _issue_title(i: dict[str, Any]) -> str:
 def _write_record(audit_dir: Path, report: AuditReport, skill_report: str | None) -> None:
     """判定の根拠を監査の作業場所に残す（Skill の報告の全文、構造化した結果、結果の検証）。"""
     if skill_report:
-        (audit_dir / "skill_report.md").write_text(skill_report.rstrip() + "\n", encoding="utf-8")
-    (audit_dir / "structured_report.json").write_text(json.dumps(report.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+        (audit_dir / "skill_report.md").write_text(skill_report.rstrip() + "\n", encoding="utf-8", newline="\n")
+    (audit_dir / "structured_report.json").write_text(json.dumps(report.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
     d = report.detail
     lines = ["# 公開品質監査の記録", "", f"- 監査担当: {report.auditor}", f"- Skill: {report.skill}",
              f"- 対象コミット: {d.get('target_commit')}", f"- 監査の回: {d.get('round')}",
@@ -397,7 +397,7 @@ def _write_record(audit_dir: Path, report: AuditReport, skill_report: str | None
         lines += [f"- {i['label']}: **{i['status']}** — {'; '.join(i['evidence'][:5])}" for i in d["required_checks"]["items"]]
     lines += ["", "## 指摘", ""] + ([f"- **{f.issue_id}** [{f.severity}] {f.title}" for f in report.findings] or ["なし"])
     lines += ["", "Skill の報告の全文は `skill_report.md`、実行ログは `execution_log.jsonl`、依頼文は `prompt.md`。"]
-    (audit_dir / "publication_quality_audit.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (audit_dir / "publication_quality_audit.md").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
 # ====================================================================== 内蔵の確認項目による代用

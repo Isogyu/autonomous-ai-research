@@ -85,7 +85,7 @@ def write_render_tool(ws: Path) -> None:
     tools.mkdir(exist_ok=True)
     (tools / "report_charts.py").write_text(
         "# このファイルは自動生成（自律研究パイプラインの表・図の生成処理の写し）。標準ライブラリだけで動く。\n"
-        + inspect.getsource(charts), encoding="utf-8")
+        + inspect.getsource(charts), encoding="utf-8", newline="\n")
     block_src = inspect.getsource(results_block).replace("results_table(", "report_charts.results_table(")
     (tools / "render_report_assets.py").write_text(f'''"""報告書の表（report/results.md）と図（report/figures/）を、分析結果から作り直す。
 
@@ -117,7 +117,7 @@ verdicts = json.loads((root / "report" / "verdicts.json").read_text(encoding="ut
 for name, svg in report_charts.charts_for(results).items():
     (root / "report" / "figures" / name).write_text(svg, encoding="utf-8")
 print("report/results.md と report/figures/ を作り直した")
-''', encoding="utf-8")
+''', encoding="utf-8", newline="\n")
 
 
 def write_static(ctx: Ctx, verdicts: dict[str, str], *, license_spdx: str, holder: str) -> dict[str, Any]:
@@ -129,13 +129,13 @@ def write_static(ctx: Ctx, verdicts: dict[str, str], *, license_spdx: str, holde
         stale.unlink()
     figs = charts_for(results)
     for name, svg in figs.items():
-        (rep / "figures" / name).write_text(svg, encoding="utf-8")
-    (rep / "results.md").write_text(results_block(results, verdicts) + "\n", encoding="utf-8")
+        (rep / "figures" / name).write_text(svg, encoding="utf-8", newline="\n")
+    (rep / "results.md").write_text(results_block(results, verdicts) + "\n", encoding="utf-8", newline="\n")
     # 表と図を作り直せるよう、判定と、標準ライブラリだけで動く生成スクリプトをリポジトリに入れる
-    (rep / "verdicts.json").write_text(json.dumps(verdicts, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (rep / "verdicts.json").write_text(json.dumps(verdicts, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     write_render_tool(ctx.ws)
     if license_spdx.upper() == "MIT" and not (ctx.ws / "LICENSE").exists():
-        (ctx.ws / "LICENSE").write_text(MIT.format(year=dt.date.today().year, holder=holder), encoding="utf-8")
+        (ctx.ws / "LICENSE").write_text(MIT.format(year=dt.date.today().year, holder=holder), encoding="utf-8", newline="\n")
     return {"n_results": len(results), "figures": sorted(figs)}
 
 
@@ -180,7 +180,7 @@ AI とシステム開発の基礎を理解している SIer 企業の技術者�
 - 実測した値と、仮定・推測を文の上で区別する（「実測」「仮定」「推測」と明記する）。
 - 事前登録した仮説の検証と、探索的分析を別の段落に分ける。探索的分析から結論を出さない。
 - 原論文の内容は、要旨しか読めていないならそう書く。
-- 作業用のパス（/Users/ で始まるものなど）、API キー、個人名を書かない。
+- 作業用のパス（/Users/…、/home/…、C:\\Users\\…、\\\\サーバー\\共有 など）、API キー、個人名を書かない。
 - `prereg/`、`results/`、`experiments/`、`tests/` は変更しない。
 """
     res = await ctx.ask("implementer", "成果物の作成", f"{ctx.project_id}:narrative:{round_no}", prompt,
@@ -206,7 +206,7 @@ def assemble(ws: Path, title: str) -> dict[str, Any]:
         text = text.replace(RESULTS_MARK, filled, 1).replace(FIGURES_MARK, "")
     else:   # 目印が消されていても、結果の表は必ず載せる
         text += f"\n\n## 実験結果（自動集計）\n\n{filled}\n"
-    src.write_text(text, encoding="utf-8")
+    src.write_text(text, encoding="utf-8", newline="\n")
 
     body = markdown.markdown(text, extensions=["tables", "fenced_code", "toc"])
     # HTML は1ファイルで読めるよう、グラフを埋め込む
@@ -229,7 +229,7 @@ figure{{margin:1.2em 0;overflow-x:auto}}figure svg{{max-width:100%;height:auto}}
 {body}
 </main></body></html>
 """
-    (rep / "report.html").write_text(page, encoding="utf-8")
+    (rep / "report.html").write_text(page, encoding="utf-8", newline="\n")
     return {"figures": [f.name for f in figs]}
 
 
@@ -258,7 +258,7 @@ def copy_audit(ws: Path, audit_dirs: list[Path], third_party_texts: list[tuple[s
                 data = json.loads(rec.read_text(encoding="utf-8"))
                 if isinstance(data, dict) and data.pop("要旨", None) is not None:
                     data["要旨"] = "（公開候補には含めていない。原論文の要旨は取得元で読める）"
-                    rec.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
+                    rec.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8", newline="\n")
             except ValueError:
                 rec.unlink()
         swaps = [(str(d.parent / "target"), "<監査対象>"), (str(d), "<監査の作業場所>"), (str(d.parent.parent.parent), "<研究の作業領域>"),
@@ -277,9 +277,9 @@ def copy_audit(ws: Path, audit_dirs: list[Path], third_party_texts: list[tuple[s
                 redacted += [f"{p.relative_to(ws)}: {r}" for r in reasons]
             for a, b in swaps:
                 new = new.replace(a, b)
-            new = re.sub(r"/Users/[A-Za-z0-9_.\-]+/", "~/", new)
+            new = wsmod.redact_local_paths(new)
             if new != text:
-                p.write_text(new, encoding="utf-8")
+                p.write_text(new, encoding="utf-8", newline="\n")
     return redacted
 
 

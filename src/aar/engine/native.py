@@ -165,7 +165,7 @@ async def understand(ctx: Ctx, proposal: dict[str, Any], memory_context: str, fu
                      ("未解決の問い", "open_questions"), ("関連研究", "related_work")):
         doc += ["", f"## {title}", *[f"- {x}" for x in data.get(k, [])]]
     (ctx.ws / "docs").mkdir(exist_ok=True)
-    (ctx.ws / "docs" / "paper_review.md").write_text("\n".join(doc) + "\n", encoding="utf-8")
+    (ctx.ws / "docs" / "paper_review.md").write_text("\n".join(doc) + "\n", encoding="utf-8", newline="\n")
     wsmod.commit_all(ctx.ws, "原論文の整理")
     return data
 
@@ -267,7 +267,7 @@ async def run_stage(ctx: Ctx, cycle: int, stage: str) -> RunResult:
                              safety=ctx.policy.safety, timeout_s=timeout, heartbeat=ctx.heartbeat)
     (ctx.ws / out / "run.log").write_text(f"exit={r.returncode} duration={r.duration_s:.1f}s sandbox={r.sandbox}\n"
                                           f"--- stdout ---\n{r.stdout[-20000:]}\n--- stderr ---\n{r.stderr[-20000:]}\n",
-                                          encoding="utf-8")
+                                          encoding="utf-8", newline="\n")
     if r.ok and not (ctx.ws / out / "raw.jsonl").exists():
         r = r.model_copy(update={"ok": False, "stderr": r.stderr + f"\n{out}/raw.jsonl が作られていない"})
     return r

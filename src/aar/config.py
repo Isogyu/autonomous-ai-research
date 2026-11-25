@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AAR_", env_file=".env", extra="ignore")
 
     database_url: str = "postgresql://aar:aar@127.0.0.1:55432/aar"
+    # 移行を適用する接続（表の所有者）。設定すると、database_url は実行用の役割（aar_app）の接続として扱い、
+    # ワーカーは移行を適用しない（未適用があれば起動しない）。空なら database_url で移行も行う（従来どおり）
+    migration_database_url: str = ""
     temporal_address: str = "127.0.0.1:7233"
     temporal_namespace: str = "default"
     task_queue: str = "aar"
@@ -44,6 +47,31 @@ class Settings(BaseSettings):
     mode: str = "real"
     ui_host: str = "127.0.0.1"
     ui_port: int = 8765
+    # ---- コンテナ（環境ごとの値。方針ファイルではなくここに置き、既存の研究に固定した方針のハッシュを変えない）
+    # podman が既定。docker は旧環境（macOS）専用で、AAR_CONTAINER_ENGINE=docker と明示したときだけ使う
+    container_engine: str = "podman"
+    podman_bin: str = ""                 # 空なら PATH の podman。会社の標準の場所があれば、その実行ファイルを指定する
+    podman_connection: str = ""          # `podman system connection list` の名前。空なら既定の接続
+    podman_rootful_user: str = "1000:1000"   # rootful のとき、実験のコンテナを動かす UID:GID（rootless では使わない）
+    # 改善候補を実行するイメージ。内容を固定するため、ダイジェスト（@sha256:…）つきで指定する。空なら評価しない（保留）
+    improve_image: str = ""
+    # 改善候補を作る側（実行担当の CLI）は、まだ OS による隔離の中で動かせない。人がこれを設定したときだけ生成する
+    improve_allow_unisolated_generator: bool = False
+    # 基盤のサービス（PostgreSQL）のコンテナ。公開は 127.0.0.1 だけ
+    postgres_image: str = "docker.io/pgvector/pgvector:0.8.7-pg17"
+    postgres_container: str = "aar-postgres"
+    postgres_volume: str = "aar-pgdata"
+    postgres_port: int = 55432
+    temporal_db: str = ""                # Temporal の単体サーバーの履歴ファイル。空なら data_dir/temporal.db
+    # 実行担当の CLI の実行ファイル。空なら PATH から探す（Windows の .cmd ランチャーは直接は起動しない）
+    claude_bin: str = ""
+    codex_bin: str = ""
+    # 表示と、日次・週次の区切りに使うタイムゾーン（IANA の名前）。空なら OS の設定。DB に保存する時刻は常に UTC
+    timezone: str = ""
+    # PowerShell から WSL の中の制御処理を呼ぶときのディストリビューション名（WSL 方式のときだけ。Windows 側で読む）
+    wsl_distro: str = ""
+    # 工程が失敗したとき、ホストの電源の記録を読めなければ、失敗と決めずに保留にする（スリープなしとは扱わない）
+    hold_on_unknown_sleep: bool = True
 
 
 class ModelChoice(BaseModel):
@@ -166,3 +194,13 @@ def load_policy(path: Path | None = None) -> Policy:
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def display_tz() -> Any:
+    """表示と、日次・週次の区切りに使うタイムゾーン。未設定なら None（OS の設定を使う）。DB の時刻は常に UTC。"""
+    name = get_settings().timezone
+    if not name:
+        return None
+    from zoneinfo import ZoneInfo
+
+    return ZoneInfo(name)

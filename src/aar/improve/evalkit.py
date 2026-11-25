@@ -1,14 +1,24 @@
 """現行方式と候補を、同じ課題・同じ条件で比べる評価器。
 
-評価する側（このモジュール）は、候補のコードを自分のプロセスに読み込まない。候補のファイルは Git から取り出して一時領域に置き、
-隔離した別プロセス（child.py）で動かして、出力の文字列だけを受け取る。別プロセスには課題の入力だけを渡し、正解は渡さない。
+評価する側（このモジュール）は、候補のコードを自分のプロセスに読み込まない。候補のファイルは Git から取り出し、
+隔離した実行環境（child.py）で動かして、出力の文字列だけを受け取る。実行環境には課題の入力だけを渡し、正解は渡さない。
 採点は決定的で、モデルを呼ばない。
+
+隔離の方式（計画の required_isolation と一致しない実行は、採否の判定に使えない）:
+  podman   : 内容を固定したイメージの Podman コンテナ。マウントなし、ネットワークなし、読み取り専用、nobody、資源の上限つき。
+             候補のファイル・child.py・課題の入力は標準入力で渡し、ホストのファイルは何も見せない。現行方式と候補は同じ条件で動く。
+             その構成で隔離の検証（aar podman verify）に通っていなければ、実行しない（isolation_unavailable）。
+  seatbelt : macOS の sandbox-exec（旧環境専用）。
+  process  : 別プロセスにするだけ（`python -I -S`）。ファイルもネットワークも隔離しない。テスト用で、採否の判定には使えない。
+どの方式も、使えないときに弱い方式へは切り替えない。
 
 対象は fix_context（修正担当へ渡す指摘の文脈）。測るのは、渡す文脈の完全さであって、修正の質や研究の質ではない。
 """
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import csv
 import hashlib
 import json
@@ -24,6 +34,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from aar import container, proc
 from aar.improve.targets import Target
 
 GUARDS = ("ran", "valid_json", "issues_kept", "fields_kept", "within_budget", "deterministic")
@@ -181,9 +192,81 @@ def _seatbelt_profile(tmp: Path, deny_read: list[Path]) -> str:
 """
 
 
+# 改善候補を実行するコンテナの資源の上限（評価器の一部。変えると評価器のハッシュが変わる）
+PODMAN_LIMITS = container.Limits(memory="512m", cpus=1, pids=64, tmpfs_mb=64, network="none")
+
+# コンテナの中で最初に動く部分。標準入力の JSON から候補のファイルを一時領域（tmpfs）に置き、child.py に課題を渡す
+_BOOTSTRAP = ("import sys,json,io;j=json.loads(sys.stdin.buffer.read().decode('utf-8'));"
+              "open('/tmp/module.py','w',encoding='utf-8').write(j['module_source']);"
+              "sys.stdin=io.StringIO(json.dumps(j['job']));"
+              "exec(compile(j['child_source'],'child.py','exec'),{'__name__':'__main__'})")
+
+
+def podman_isolation() -> dict[str, Any]:
+    """改善候補の実行に使う Podman の構成を確かめて返す。使えなければ IsolationUnavailable。"""
+    from aar.config import get_settings
+
+    s = get_settings()
+    if "@sha256:" not in s.improve_image:
+        raise container.IsolationUnavailable("改善候補を実行するイメージ（AAR_IMPROVE_IMAGE）を、ダイジェスト（@sha256:…）つきで指定していない")
+    engine = container.get_engine()
+    return container.require_verified(engine, s.improve_image, PODMAN_LIMITS, "eval", data_dir=s.data_dir,
+                                      rootful_user=s.podman_rootful_user)
+
+
 def isolation_available() -> str:
-    """この環境で使える、いちばん強い隔離。seatbelt（macOS の sandbox-exec）か、process（別プロセスにするだけ）。"""
+    """この環境で使える、いちばん強い隔離。podman（検証済みの構成）、seatbelt（macOS の sandbox-exec）、process（別プロセスにするだけ）。"""
+    try:
+        podman_isolation()
+        return "podman"
+    except container.ContainerError:
+        pass
     return "seatbelt" if sys.platform == "darwin" and shutil.which("sandbox-exec") else "process"
+
+
+def _run_coro(coro: Any) -> Any:
+    """同期の呼び出し元から、コンテナの実行（非同期）を動かす。呼び出し元でイベントループが動いていても使える。"""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
+def _run_variant_podman(module_source: str, target: Target, cases: list[dict[str, Any]], timeout_s: int) -> dict[str, Any]:
+    from aar.config import get_settings
+
+    try:
+        detail = podman_isolation()
+    except container.ContainerError as e:
+        return {"status": "failed", "failure_kind": "isolation_unavailable", "error": str(e)[:400], "results": [], "seconds": 0.0}
+    s = get_settings()
+    payload = json.dumps({
+        "module_source": module_source, "child_source": Path(__file__).with_name("child.py").read_text(encoding="utf-8"),
+        "job": {"module": "/tmp/module.py", "entry": target.entry, "cases": [{"id": c["id"], "inputs": c["inputs"]} for c in cases]},
+    }, ensure_ascii=False, default=str).encode("utf-8")
+    with tempfile.TemporaryDirectory(prefix="aar-improve-") as td:
+        res = _run_coro(container.run_container(
+            container.get_engine(), s.improve_image, ["python", "-I", "-S", "-B", "-c", _BOOTSTRAP],
+            flags=container.hardening_flags(PODMAN_LIMITS, container.EVAL_USER), cwd=Path(td), stdin_data=payload,
+            timeout_s=timeout_s, kind="eval", poll_s=1))
+    seconds = round(res.duration_s, 3)
+    base = {"results": [], "seconds": seconds, "isolation_detail": detail | {"container": res.name, "container_id": res.container_id}}
+    if not res.removed:
+        # コンテナが残った実行は、隔離した実行として認めない
+        return base | {"status": "failed", "failure_kind": "isolation_unavailable",
+                       "error": f"実行のあとにコンテナ {res.name} が残った: {res.cleanup_note}"[:400]}
+    if res.timed_out:
+        return base | {"status": "failed", "failure_kind": "timeout", "error": f"{timeout_s} 秒で打ち切った"}
+    return base | _parse_child_output(res.stdout, res.stderr)
+
+
+def _parse_child_output(stdout: str, stderr: str) -> dict[str, Any]:
+    try:
+        out = json.loads(stdout)
+        assert isinstance(out, dict) and isinstance(out.get("results"), list)
+    except (ValueError, AssertionError):
+        return {"status": "failed", "failure_kind": "output_invalid", "results": [], "error": (stderr[-400:] or "出力を読めない")}
+    if out.get("error"):
+        return {"status": "failed", "failure_kind": "code_error", "error": out["error"], "results": []}
+    return {"status": "completed", "failure_kind": "", "error": "", "results": out["results"]}
 
 
 def _limits() -> None:
@@ -195,20 +278,25 @@ def _limits() -> None:
 
 def run_variant(module_source: str, target: Target, cases: list[dict[str, Any]], *, isolation: str, deny_read: list[Path],
                 timeout_s: int = 120) -> dict[str, Any]:
-    """評価対象の1ファイルを、隔離した別プロセスで全課題に実行する。課題の入力だけを渡す。"""
-    if isolation == "seatbelt" and isolation_available() != "seatbelt":
+    """評価対象の1ファイルを、隔離した実行環境で全課題に実行する。課題の入力だけを渡す。"""
+    if isolation == "podman":
+        return _run_variant_podman(module_source, target, cases, timeout_s)
+    if isolation not in ("seatbelt", "process"):
+        return {"status": "failed", "failure_kind": "isolation_unavailable", "error": f"未知の隔離の方式: {isolation}", "results": [], "seconds": 0.0}
+    if isolation == "seatbelt" and not (sys.platform == "darwin" and shutil.which("sandbox-exec")):
         return {"status": "failed", "failure_kind": "isolation_unavailable", "error": "sandbox-exec が使えない", "results": [], "seconds": 0.0}
     python = str(Path(getattr(sys, "_base_executable", "") or sys.executable).resolve())
     with tempfile.TemporaryDirectory(prefix="aar-improve-") as td:
         tmp = Path(td).resolve()
-        (tmp / "module.py").write_text(module_source, encoding="utf-8")
+        (tmp / "module.py").write_text(module_source, encoding="utf-8", newline="\n")
         shutil.copyfile(Path(__file__).with_name("child.py"), tmp / "child.py")
         job = json.dumps({"module": str(tmp / "module.py"), "entry": target.entry,
                           "cases": [{"id": c["id"], "inputs": c["inputs"]} for c in cases]}, ensure_ascii=False, default=str)
-        cmd = [python, "-I", "-S", "-B", str(tmp / "child.py")]
+        cmd = [python, "-I", "-S", "-B", "-X", "utf8", str(tmp / "child.py")]     # -I は PYTHONIOENCODING を無視するので、UTF-8 を明示する
         if isolation == "seatbelt":
             cmd = ["sandbox-exec", "-p", _seatbelt_profile(tmp, deny_read), *cmd]
-        env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp), "TMPDIR": str(tmp), "LANG": "C.UTF-8", "PYTHONIOENCODING": "utf-8"}
+        env = (proc.base_env() if proc.IS_WINDOWS else {"PATH": "/usr/bin:/bin"}) | {
+            "HOME": str(tmp), "TMPDIR": str(tmp), "TEMP": str(tmp), "TMP": str(tmp), "LANG": "C.UTF-8", "PYTHONIOENCODING": "utf-8"}
         started = time.monotonic()
         try:
             p = subprocess.run(cmd, input=job.encode(), capture_output=True, cwd=tmp, env=env, timeout=timeout_s,
@@ -230,6 +318,7 @@ def run_variant(module_source: str, target: Target, cases: list[dict[str, Any]],
 
 def environment() -> dict[str, Any]:
     return {"python": platform.python_version(), "platform": platform.platform(), "isolation_available": isolation_available(),
+            "note_python": "podman の実行では、候補を動かす Python はイメージのもの（isolation_detail の image_id）",
             "model_calls": 0, "note": "採点は決定的で、モデルを呼ばない"}
 
 
@@ -291,5 +380,6 @@ def evaluate(module_source: str, target: Target, cases: list[dict[str, Any]], *,
     by_id = {r.get("id"): r for r in run["results"]}
     scores = [score_case(c, by_id.get(c["id"])) for c in cases] if run["status"] == "completed" else []
     return {"status": run["status"], "failure_kind": run["failure_kind"], "error": run["error"], "isolation": isolation,
+            "isolation_detail": run.get("isolation_detail", {}),
             "seconds": run["seconds"], "per_case": scores, "metrics": summarize(scores) if scores else {},
             "outputs": {r.get("id"): r.get("output") for r in run["results"]}}

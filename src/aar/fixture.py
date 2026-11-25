@@ -164,7 +164,7 @@ def clone_project(src_id: str, *, scrub: bool = False, purpose: str = "fixture")
                 # 新旧の対応は、公開するリポジトリの外に残す
                 (new_root / "commit_map.tsv").write_text(
                     "# 元の研究のコミット\t複製のコミット（履歴から取り除いたあと）\n"
-                    + "".join(f"{a}\t{b}\n" for a, b in commit_map.items()), encoding="utf-8")
+                    + "".join(f"{a}\t{b}\n" for a, b in commit_map.items()), encoding="utf-8", newline="\n")
             if public:
                 left = req.run_required_checks(ws, texts)
                 bad = [i for i in left["items"] if i["id"] in ("third_party_text", "secrets") and i["status"] != "ok"]
@@ -254,9 +254,9 @@ def inject_overclaim(project_id: str) -> dict[str, Any]:
     before = wsmod.head(ws)
     readme = (ws / "README.md").read_text(encoding="utf-8")
     head, sep, rest = readme.partition("\n")
-    (ws / "README.md").write_text(head + sep + OVERCLAIM_README + rest, encoding="utf-8")
+    (ws / "README.md").write_text(head + sep + OVERCLAIM_README + rest, encoding="utf-8", newline="\n")
     report = ws / "report" / "report.md"
-    report.write_text(report.read_text(encoding="utf-8").rstrip("\n") + "\n" + OVERCLAIM_REPORT, encoding="utf-8")
+    report.write_text(report.read_text(encoding="utf-8").rstrip("\n") + "\n" + OVERCLAIM_REPORT, encoding="utf-8", newline="\n")
     after = wsmod.commit_all(ws, "検証用: 証拠を超える主張を README と報告書に混入（意図的な不具合）")
     changed = wsmod.changed_paths(ws, before)
     with connect() as conn:

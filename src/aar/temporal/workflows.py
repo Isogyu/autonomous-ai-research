@@ -183,6 +183,13 @@ class ResearchWorkflow:
                     # 「監査の結果が正常でない」「工程の失敗」という別の種類の失敗として届く
                     check = await self._quick("host_sleep_check", self.s.project_id, phase, step_started.isoformat(), sleep_retries)
                     if not check["slept"]:
+                        if check.get("hold_unknown") and workflow.patched("host-sleep-unknown"):
+                            # 電源の記録を読めない。スリープがなかったとは言えないので、工程の失敗と決めずに保留にする
+                            cause = e.cause if e.cause is not None else e
+                            await self._wait_resume("host_sleep_unknown", f"工程 {phase} が失敗したが、この PC がその間にスリープしていたかを"
+                                                    f"確かめられない（{check.get('source', '')}: {check.get('detail', '')}）。"
+                                                    f"原因を確かめてから再開する（aar projects resume）。失敗の内容: {str(cause)[:300]}")
+                            continue
                         raise
                     sleep_retries += 1
                     if sleep_retries > MAX_SLEEP_RETRIES:
