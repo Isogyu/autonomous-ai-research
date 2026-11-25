@@ -1,0 +1,631 @@
+{
+ "note": "最初の一巡（2026-11-25）の台帳の写し。専用の DB（aar_improve）から取り出した。封印評価の課題の中身と seed は含めていない",
+ "plans": [
+  {
+   "id": 1,
+   "target": "fix_context",
+   "plan": {
+    "cases": {
+     "dev": 10,
+     "sealed": 13,
+     "select": 12
+    },
+    "guards": [
+     "ran",
+     "valid_json",
+     "issues_kept",
+     "fields_kept",
+     "within_budget",
+     "deterministic"
+    ],
+    "limits": {
+     "parallel": 1,
+     "timeout_s": 120,
+     "max_generation_usd": 2.0,
+     "max_candidates_per_origin": 3
+    },
+    "splits": {
+     "dev": [
+      "eb54cda97570"
+     ],
+     "sealed": [
+      "b72144846b0d"
+     ],
+     "select": []
+    },
+    "target": "fix_context",
+    "measures": "渡す文脈の完全さ（基盤の正しさ・研究過程の品質の一部）。修正の質、研究の質、科学的な成果は測らない",
+    "question": "修正担当へ渡す文脈に、指摘が参照する主張・証拠の定義が入っているか",
+    "min_level": 0.9,
+    "budget_chars": 24000,
+    "cases_sha256": "0e3a8484192d27160e0c313b8a26c33678f1a392a53082819fb6308378708fc3",
+    "min_precision": 0.8,
+    "primary_metric": "ref_resolution_micro",
+    "min_improvement": 0.3,
+    "stop_conditions": "候補の生成が上限（max_candidates_per_origin）に達したら、その発見元からの生成をやめる",
+    "synthetic_cases": {
+     "sealed": 12,
+     "select": 12
+    },
+    "no_case_regression": true,
+    "required_isolation": "seatbelt",
+    "max_mean_chars_ratio": 4.0,
+    "min_sealed_real_cases": 3,
+    "max_sealed_evaluations": 1,
+    "min_sealed_real_groups": 2
+   },
+   "plan_sha256": "b66b14bc6714c146dcbad4e86f8e1713c0ff52be3a75dfd3ed204cbb645631bd",
+   "evaluator_sha256": "ca32eb9ffdaba9ae53708ad80c1b4d6f956318f6d1cf4345e11cc6080065c642",
+   "cases_sha256": "0e3a8484192d27160e0c313b8a26c33678f1a392a53082819fb6308378708fc3",
+   "created_by": "claude_code:session",
+   "created_at": "2026-11-24 16:47:17.285695+00:00"
+  }
+ ],
+ "candidates": [
+  {
+   "id": "IC-20261124-6e4bf7",
+   "parent_id": null,
+   "area_key": null,
+   "target": "fix_context",
+   "base_commit": "33de887cb423f2aa590a54af24b09fb3074eb976",
+   "origin_kind": "run_record",
+   "origin_fingerprint": "086481322f528805",
+   "origin": {
+    "kind": "fix_context_unresolved_refs",
+    "evidence": [
+     {
+      "case": "real:RP-20261123-2efcc1:fix-research-round2",
+      "group": "eb54cda97570",
+      "n_refs": 5
+     },
+     {
+      "case": "real:RP-20261123-2efcc1:fix-research-round3",
+      "group": "eb54cda97570",
+      "n_refs": 5
+     },
+     {
+      "case": "real:RP-20261123-2efcc1:fix-research-round4",
+      "group": "eb54cda97570",
+      "n_refs": 6
+     },
+     {
+      "case": "real:RP-20261123-2efcc1:fix-research-round5",
+      "group": "eb54cda97570",
+      "n_refs": 7
+     },
+     {
+      "case": "real:RP-20261123-775b36:fix-research-round2",
+      "group": "b72144846b0d",
+      "n_refs": 3
+     }
+    ],
+    "frequency": {
+     "groups": 2,
+     "fix_rounds": 5,
+     "unresolved_refs": 26,
+     "rounds_with_unresolved_refs": 5
+    }
+   },
+   "problem": "研究監査の修正 5 回のうち 5 回で、修正担当に渡した指摘が主張・証拠の ID を参照しているのに、その定義（主張の本文、証拠の所在）を渡していなかった（参照 26 件）。",
+   "hypothesis": "指摘が参照する主張・証拠の定義を、予算の範囲で文脈に添えれば、修正担当が参照先を特定できないまま対応することが減る。",
+   "applies_when": "指摘が主張や証拠を ID で参照していて、その回の監査の主張・証拠の一覧が手元にあるとき",
+   "side_effects": "文脈が長くなる。監査担当が書いた文章（信頼しない入力）が増える。",
+   "allowed_paths": [
+    "src/aar/engine/fix_context.py"
+   ],
+   "patch": "diff --git a/src/aar/engine/fix_context.py b/src/aar/engine/fix_context.py\nindex ad7ffae..01513e3 100644\n--- a/src/aar/engine/fix_context.py\n+++ b/src/aar/engine/fix_context.py\n@@ -25,4 +25,72 @@ def build_fix_context(findings: list[dict[str, Any]], *, claims: list[dict[str,\n     budget_chars: 返す文字列の長さの上限（現行方式は使っていない）。\n     \"\"\"\n     rows = [{\"issue_id\": f[\"issue_id\"], \"severity\": f[\"severity\"], \"title\": f[\"title\"], **(f.get(\"detail\") or {})} for f in findings]\n-    return json.dumps(rows, ensure_ascii=False, indent=2, default=str)\n+    base = json.dumps(rows, ensure_ascii=False, indent=2, default=str)\n+    limit = max(budget_chars if isinstance(budget_chars, int) else 0, len(base))\n+\n+    # 参照先の定義の表（ID -> 渡す項目）。文字列以外・空の ID は無視し、重複は最初のものを使う。\n+    defs: dict[str, dict[str, Any]] = {}\n+    for items, id_key, fields in (\n+        (claims, \"claim_id\", (\"claim_text\", \"status\")),\n+        (evidence, \"evidence_id\", (\"locator\", \"observed_result\")),\n+    ):\n+        for it in items or []:\n+            if not isinstance(it, dict):\n+                continue\n+            i = it.get(id_key)\n+            if not isinstance(i, str) or not i.strip() or i in defs:\n+                continue\n+            d = {id_key: i}\n+            for k in fields:\n+                v = it.get(k)\n+                if isinstance(v, str) and v.strip():\n+                    d[k] = v\n+            if len(d) > 1:\n+                defs[i] = d\n+    if not defs:\n+        return base\n+\n+    def mentioned(row: dict[str, Any]) -> list[str]:\n+        # 指摘の各値（文字列）に現れる ID を、現れた順に集める。ID の前後が英数字のものは別物として除く。\n+        found: list[tuple[int, str]] = []\n+        for key, val in row.items():\n+            if key in (\"issue_id\", \"severity\"):\n+                continue\n+            if not isinstance(val, str):\n+                continue\n+            for i in defs:\n+                p = val.find(i)\n+                while p >= 0:\n+                    a = val[p - 1] if p > 0 else \"\"\n+                    b = val[p + len(i)] if p + len(i) < len(val) else \"\"\n+                    if not (a.isascii() and a.isalnum()) and not (b.isascii() and b.isalnum()):\n+                        found.append((p, i))\n+                        break\n+                    p = val.find(i, p + 1)\n+        found.sort()\n+        out: list[str] = []\n+        for _, i in found:\n+            if i not in out:\n+                out.append(i)\n+        return out\n+\n+    # 同じ定義は最初に参照した指摘にだけ添える。予算に収まる範囲で、指摘の順に貪欲に足す。\n+    attached: list[list[dict[str, Any]]] = [[] for _ in rows]\n+    seen: set[str] = set()\n+\n+    def render() -> str:\n+        out_rows = []\n+        for r, a in zip(rows, attached):\n+            out_rows.append({**r, \"referenced_definitions\": a} if a else r)\n+        return json.dumps(out_rows, ensure_ascii=False, indent=2, default=str)\n+\n+    for n, r in enumerate(rows):\n+        for i in mentioned(r):\n+            if i in seen:\n+                continue\n+            attached[n].append(defs[i])\n+            if len(render()) > limit:\n+                attached[n].pop()\n+            else:\n+                seen.add(i)\n+    return render()",
+   "patch_sha256": "dc9f6fcc77db205c8a3e128b8c6e917532b513d8dd99791e43b704f18a123525",
+   "candidate_commit": "84e72ab13a3ca100425899b290b34cfc2fea35a5",
+   "generation": {
+    "agent": "claude",
+    "model": "sonnet",
+    "tools": "Read, Glob, Grep, Write, Edit",
+    "usage": {
+     "speed": "standard",
+     "iterations": [
+      {
+       "type": "message",
+       "input_tokens": 2,
+       "output_tokens": 647,
+       "cache_creation": {
+        "ephemeral_1h_input_tokens": 2119,
+        "ephemeral_5m_input_tokens": 0
+       },
+       "cache_read_input_tokens": 15865,
+       "cache_creation_input_tokens": 2119
+      }
+     ],
+     "input_tokens": 14,
+     "service_tier": "standard",
+     "inference_geo": "global",
+     "output_tokens": 3848,
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 14168,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "fallback_credit": null,
+     "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+     },
+     "output_tokens_details": {
+      "thinking_tokens": 726
+     },
+     "cache_read_input_tokens": 67502,
+     "cache_creation_input_tokens": 14168
+    },
+    "billing": "subscription_equivalent",
+    "cost_usd": 0.10222559999999999,
+    "isolation": "基盤の複製（リモートなし）を作業ディレクトリにした CLI の実行。OS による読み取りの制限はない",
+    "duration_s": 32.46364208299201,
+    "session_id": "ed4a089d-935f-4a5a-816d-6e26307f134d",
+    "cost_is_estimate": true,
+    "external_model_calls": 1
+   },
+   "status": "rejected",
+   "status_reason": "select の課題で、文脈が長くなりすぎる",
+   "rejected_under": "評価計画 b66b14bc6714（対象 fix_context、基盤 33de887cb423）の条件での不採用。条件が変われば結論は変わり得る",
+   "created_by": "claude_code:session",
+   "created_at": "2026-11-24 16:47:10.622478+00:00",
+   "updated_at": "2026-11-24 16:48:29.766470+00:00"
+  }
+ ],
+ "runs": [
+  {
+   "run_key": "baseline:1:33de887cb423:dev",
+   "plan_id": 1,
+   "candidate_id": null,
+   "variant": "baseline",
+   "split": "dev",
+   "commit_sha": "33de887cb423f2aa590a54af24b09fb3074eb976",
+   "status": "completed",
+   "failure_kind": "",
+   "isolation": "seatbelt",
+   "environment": {
+    "note": "採点は決定的で、モデルを呼ばない",
+    "cases": 10,
+    "python": "3.13.2",
+    "platform": "macOS-26.6.1-arm64-arm-64bit-Mach-O",
+    "model_calls": 0,
+    "isolation_available": "seatbelt"
+   },
+   "metrics": {
+    "n_refs": 44,
+    "n_cases": 10,
+    "mean_chars": 1445.7,
+    "n_resolved": 0,
+    "n_real_cases": 4,
+    "min_precision": null,
+    "n_real_groups": 1,
+    "guard_failures": {},
+    "n_cases_with_refs": 9,
+    "ref_resolution_macro": 0.0,
+    "ref_resolution_micro": 0.0
+   },
+   "usage": {
+    "billing": "none（モデルを呼ばない）",
+    "seconds": 0.056,
+    "internal_waits": 0,
+    "external_model_calls": 0
+   },
+   "actor": "claude_code:session",
+   "created_at": "2026-11-24 16:47:17.285695+00:00"
+  },
+  {
+   "run_key": "baseline:1:33de887cb423:select",
+   "plan_id": 1,
+   "candidate_id": null,
+   "variant": "baseline",
+   "split": "select",
+   "commit_sha": "33de887cb423f2aa590a54af24b09fb3074eb976",
+   "status": "completed",
+   "failure_kind": "",
+   "isolation": "seatbelt",
+   "environment": {
+    "note": "採点は決定的で、モデルを呼ばない",
+    "cases": 12,
+    "python": "3.13.2",
+    "platform": "macOS-26.6.1-arm64-arm-64bit-Mach-O",
+    "model_calls": 0,
+    "isolation_available": "seatbelt"
+   },
+   "metrics": {
+    "n_refs": 49,
+    "n_cases": 12,
+    "mean_chars": 742.8333333333334,
+    "n_resolved": 0,
+    "n_real_cases": 0,
+    "min_precision": null,
+    "n_real_groups": 0,
+    "guard_failures": {},
+    "n_cases_with_refs": 10,
+    "ref_resolution_macro": 0.0,
+    "ref_resolution_micro": 0.0
+   },
+   "usage": {
+    "billing": "none（モデルを呼ばない）",
+    "seconds": 0.05,
+    "internal_waits": 0,
+    "external_model_calls": 0
+   },
+   "actor": "claude_code:session",
+   "created_at": "2026-11-24 16:47:17.285695+00:00"
+  },
+  {
+   "run_key": "baseline:1:33de887cb423:sealed",
+   "plan_id": 1,
+   "candidate_id": null,
+   "variant": "baseline",
+   "split": "sealed",
+   "commit_sha": "33de887cb423f2aa590a54af24b09fb3074eb976",
+   "status": "completed",
+   "failure_kind": "",
+   "isolation": "seatbelt",
+   "environment": {
+    "note": "採点は決定的で、モデルを呼ばない",
+    "cases": 13,
+    "python": "3.13.2",
+    "platform": "macOS-26.6.1-arm64-arm-64bit-Mach-O",
+    "model_calls": 0,
+    "isolation_available": "seatbelt"
+   },
+   "metrics": {
+    "n_refs": 38,
+    "n_cases": 13,
+    "mean_chars": 897.6923076923077,
+    "n_resolved": 0,
+    "n_real_cases": 1,
+    "min_precision": null,
+    "n_real_groups": 1,
+    "guard_failures": {},
+    "n_cases_with_refs": 11,
+    "ref_resolution_macro": 0.0,
+    "ref_resolution_micro": 0.0
+   },
+   "usage": {
+    "billing": "none（モデルを呼ばない）",
+    "seconds": 0.053,
+    "internal_waits": 0,
+    "external_model_calls": 0
+   },
+   "actor": "claude_code:session",
+   "created_at": "2026-11-24 16:47:17.285695+00:00"
+  },
+  {
+   "run_key": "candidate:IC-20261124-6e4bf7:1:dc9f6fcc77db:dev",
+   "plan_id": 1,
+   "candidate_id": "IC-20261124-6e4bf7",
+   "variant": "candidate",
+   "split": "dev",
+   "commit_sha": "84e72ab13a3ca100425899b290b34cfc2fea35a5",
+   "status": "completed",
+   "failure_kind": "",
+   "isolation": "seatbelt",
+   "environment": {
+    "note": "採点は決定的で、モデルを呼ばない",
+    "cases": 10,
+    "python": "3.13.2",
+    "platform": "macOS-26.6.1-arm64-arm-64bit-Mach-O",
+    "model_calls": 0,
+    "isolation_available": "seatbelt"
+   },
+   "metrics": {
+    "n_refs": 44,
+    "n_cases": 10,
+    "mean_chars": 3490.4,
+    "n_resolved": 43,
+    "n_real_cases": 4,
+    "min_precision": 1.0,
+    "n_real_groups": 1,
+    "guard_failures": {},
+    "n_cases_with_refs": 9,
+    "ref_resolution_macro": 0.9629629629629629,
+    "ref_resolution_micro": 0.9772727272727273
+   },
+   "usage": {
+    "billing": "none（モデルを呼ばない）",
+    "seconds": 0.056,
+    "internal_waits": 0,
+    "external_model_calls": 0
+   },
+   "actor": "claude_code:session",
+   "created_at": "2026-11-24 16:48:28.191781+00:00"
+  },
+  {
+   "run_key": "candidate:IC-20261124-6e4bf7:1:dc9f6fcc77db:select",
+   "plan_id": 1,
+   "candidate_id": "IC-20261124-6e4bf7",
+   "variant": "candidate",
+   "split": "select",
+   "commit_sha": "84e72ab13a3ca100425899b290b34cfc2fea35a5",
+   "status": "completed",
+   "failure_kind": "",
+   "isolation": "seatbelt",
+   "environment": {
+    "note": "採点は決定的で、モデルを呼ばない",
+    "cases": 12,
+    "python": "3.13.2",
+    "platform": "macOS-26.6.1-arm64-arm-64bit-Mach-O",
+    "model_calls": 0,
+    "isolation_available": "seatbelt"
+   },
+   "metrics": {
+    "n_refs": 49,
+    "n_cases": 12,
+    "mean_chars": 3125.5833333333335,
+    "n_resolved": 47,
+    "n_real_cases": 0,
+    "min_precision": 1.0,
+    "n_real_groups": 0,
+    "guard_failures": {},
+    "n_cases_with_refs": 10,
+    "ref_resolution_macro": 0.9466666666666667,
+    "ref_resolution_micro": 0.9591836734693877
+   },
+   "usage": {
+    "billing": "none（モデルを呼ばない）",
+    "seconds": 0.055,
+    "internal_waits": 0,
+    "external_model_calls": 0
+   },
+   "actor": "claude_code:session",
+   "created_at": "2026-11-24 16:48:28.723810+00:00"
+  },
+  {
+   "run_key": "candidate:IC-20261124-6e4bf7:1:dc9f6fcc77db:sealed",
+   "plan_id": 1,
+   "candidate_id": "IC-20261124-6e4bf7",
+   "variant": "candidate",
+   "split": "sealed",
+   "commit_sha": "84e72ab13a3ca100425899b290b34cfc2fea35a5",
+   "status": "completed",
+   "failure_kind": "",
+   "isolation": "seatbelt",
+   "environment": {
+    "note": "採点は決定的で、モデルを呼ばない",
+    "cases": 13,
+    "python": "3.13.2",
+    "platform": "macOS-26.6.1-arm64-arm-64bit-Mach-O",
+    "model_calls": 0,
+    "isolation_available": "seatbelt"
+   },
+   "metrics": {
+    "n_refs": 38,
+    "n_cases": 13,
+    "mean_chars": 3914.0,
+    "n_resolved": 36,
+    "n_real_cases": 1,
+    "min_precision": 1.0,
+    "n_real_groups": 1,
+    "guard_failures": {},
+    "n_cases_with_refs": 11,
+    "ref_resolution_macro": 0.8787878787878788,
+    "ref_resolution_micro": 0.9473684210526315
+   },
+   "usage": {
+    "billing": "none（モデルを呼ばない）",
+    "seconds": 0.055,
+    "internal_waits": 0,
+    "external_model_calls": 0
+   },
+   "actor": "claude_code:session",
+   "created_at": "2026-11-24 16:48:29.257674+00:00"
+  }
+ ],
+ "decisions": [
+  {
+   "candidate_id": "IC-20261124-6e4bf7",
+   "plan_id": 1,
+   "verdict": "rejected",
+   "checks": [
+    {
+     "name": "変更が許可された範囲に収まっている",
+     "detail": "収まっている",
+     "passed": true
+    },
+    {
+     "name": "評価器が計画の固定時から変わっていない",
+     "detail": "一致",
+     "passed": true
+    },
+    {
+     "name": "計画どおりの隔離で実行した",
+     "detail": "seatbelt",
+     "passed": true
+    },
+    {
+     "name": "候補の実行が完了している（select）",
+     "detail": "完了",
+     "passed": true
+    },
+    {
+     "name": "出力の形式と証拠の保全（select）",
+     "detail": "違反なし",
+     "passed": true
+    },
+    {
+     "name": "参照されていない項目を入れすぎていない（select）",
+     "detail": "最小 1.0（基準 0.8 以上）",
+     "passed": true
+    },
+    {
+     "name": "どの課題でも現行方式を下回らない（select）",
+     "detail": "後退なし",
+     "passed": true
+    },
+    {
+     "name": "文脈の長さの増え方が許容の範囲（select）",
+     "detail": "現行方式の 4.21 倍（上限 4.0）",
+     "passed": false
+    }
+   ],
+   "reasons": [
+    "select の課題で、文脈が長くなりすぎる"
+   ],
+   "decided_by": "policy",
+   "approved_by": null,
+   "created_at": "2026-11-24 16:48:29.766470+00:00"
+  }
+ ],
+ "events": [
+  {
+   "created_at": "2026-11-24 16:47:10.622478+00:00",
+   "candidate_id": "IC-20261124-6e4bf7",
+   "event": "proposed",
+   "actor_kind": "claude_code",
+   "actor_detail": "session",
+   "detail": {
+    "parent_id": null,
+    "origin_kind": "run_record",
+    "origin_fingerprint": "086481322f528805"
+   }
+  },
+  {
+   "created_at": "2026-11-24 16:47:17.285695+00:00",
+   "candidate_id": null,
+   "event": "plan_frozen",
+   "actor_kind": "claude_code",
+   "actor_detail": "session",
+   "detail": {
+    "plan_id": 1,
+    "plan_sha256": "b66b14bc6714c146dcbad4e86f8e1713c0ff52be3a75dfd3ed204cbb645631bd",
+    "cases_sha256": "0e3a8484192d27160e0c313b8a26c33678f1a392a53082819fb6308378708fc3",
+    "evaluator_sha256": "ca32eb9ffdaba9ae53708ad80c1b4d6f956318f6d1cf4345e11cc6080065c642"
+   }
+  },
+  {
+   "created_at": "2026-11-24 16:47:17.285695+00:00",
+   "candidate_id": null,
+   "event": "run_recorded",
+   "actor_kind": "claude_code",
+   "actor_detail": "session",
+   "detail": {
+    "split": "dev",
+    "status": "completed",
+    "run_key": "baseline:1:33de887cb423:dev",
+    "variant": "baseline",
+    "failure_kind": ""
+   }
+  },
+  {
+   "created_at": "2026-11-24 16:47:17.285695+00:00",
+   "candidate_id": null,
+   "event": "run_recorded",
+   "actor_kind": "claude_code",
+   "actor_detail": "session",
+   "detail": {
+    "split": "select",
+    "status": "completed",
+    "run_key": "baseline:1:33de887cb423:select",
+    "variant": "baseline",
+    "failure_kind": ""
+   }
+  },
+  {
+   "created_at": "2026-11-24 16:47:17.285695+00:00",
+   "candidate_id": null,
+   "event": "run_recorded",
+   "actor_kind": "claude_code",
+   "actor_detail": "session",
+   "detail": {
+    "split": "sealed",
+    "status": "completed",
+    "run_key": "baseline:1:33de887cb423:sealed",
+    "variant": "baseline",
+    "failure_kind": ""
+   }
+  },
+  {
+   "created_at": "2026-11-24 16:47:25.269606+00:00",
+   "candidate_id": "IC-20261124-6e4bf7",
+   "event": "patch_registered",
+   "actor_kind": "claude_code",
+   "actor_detail": "aar.improve.generate（起動: claude_code:session）",
+   "detail": {
+    "patch": "(省略)",
+    "status": "generated",
+    "generation": "(省略)",
+    "patch_sha256": "dc9f6fcc77db205c8a3e128b8c6e917532b513d8dd99791e43b704f18a123525",
+    "status_reason": "",
+    "candidate_commit": "84e72ab13a3ca100425899b290b34cfc2fea35a5"
+   }
+  },
+  {
+   "created_at": "2026-11-24 16:48:28.191781+00:00",
+   "candidate_id": "IC-20261124-6e4bf7",
+   "event": "run_recorded",
+   "actor_kind": "claude_code",
+   "actor_detail": "session",
+   "detail": {
+    "split": "dev",
+    "status": "completed",
+    "run_key": "candidate:IC-20261124-6e4bf7:1:dc9f6fcc77db:dev",
+    "variant": "candidate",
+    "failure_kind": ""
+   }
+  },
+  {
+   "created_at": "2026-11-24 16:48:28.191781+00:00",
+   "candidate_id": "IC-20261124-6e4bf7",
+   "event": "evaluation_started",
+   "actor_kind": "claude_code",
+   "actor_detail": "session",
+   "detail": {
+    "status": "evaluated"
+   }
+  },
+  {
+   "created_at": "2026-11-24 16:48:28.723810+00:00",
+   "candidate_id": "IC-20261124-6e4bf7",
+   "event": "run_recorded",
+   "actor_kind": "claude_code",
+   "actor_detail": "session",
+   "detail": {
+    "split": "select",
+    "status": "completed",
+    "run_key": "candidate:IC-20261124-6e4bf7:1:dc9f6fcc77db:select",
+    "variant": "candidate",
+    "failure_kind": ""
+   }
+  },
+  {
+   "created_at": "2026-11-24 16:48:29.257674+00:00",
+   "candidate_id": "IC-20261124-6e4bf7",
+   "event": "run_recorded",
+   "actor_kind": "claude_code",
+   "actor_detail": "session",
+   "detail": {
+    "split": "sealed",
+    "status": "completed",
+    "run_key": "candidate:IC-20261124-6e4bf7:1:dc9f6fcc77db:sealed",
+    "variant": "candidate",
+    "failure_kind": ""
+   }
+  },
+  {
+   "created_at": "2026-11-24 16:48:29.766470+00:00",
+   "candidate_id": "IC-20261124-6e4bf7",
+   "event": "decided",
+   "actor_kind": "policy",
+   "actor_detail": "aar.improve.decide",
+   "detail": {
+    "reasons": [
+     "select の課題で、文脈が長くなりすぎる"
+    ],
+    "verdict": "rejected"
+   }
+  },
+  {
+   "created_at": "2026-11-24 16:48:29.766470+00:00",
+   "candidate_id": "IC-20261124-6e4bf7",
+   "event": "status_set",
+   "actor_kind": "policy",
+   "actor_detail": "aar.improve.decide",
+   "detail": {
+    "status": "rejected",
+    "status_reason": "select の課題で、文脈が長くなりすぎる",
+    "rejected_under": "評価計画 b66b14bc6714（対象 fix_context、基盤 33de887cb423）の条件での不採用。条件が変われば結論は変わり得る"
+   }
+  }
+ ]
+}

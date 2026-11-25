@@ -458,6 +458,19 @@ async def research_audit(project_id: str, round_no: int) -> dict[str, Any]:
     return await _phase(project_id, "research_audit", f"audit:research:{round_no}", run)
 
 
+def _audit_evidence(project_id: str, kind: str, round_no: int) -> list[dict[str, Any]]:
+    """その回の監査の証拠の一覧（監査担当が書いた evidence.csv）。無ければ空。読むだけで、変更しない。"""
+    import csv
+
+    name = "research" if kind == "research" else "publication"
+    path = audit_root_of(project_id) / f"{name}-round{round_no}" / "audit" / "evidence.csv"
+    try:
+        with path.open(encoding="utf-8", newline="") as fh:
+            return [dict(r) for r in csv.DictReader(fh)][:500]
+    except (OSError, csv.Error, UnicodeDecodeError):
+        return []
+
+
 @activity.defn
 async def fix_audit_findings(project_id: str, kind: str, round_no: int) -> dict[str, Any]:
     """監査の重大な指摘と、ゲートで不合格になった機械的な確認を直させる。"""
@@ -493,7 +506,9 @@ async def fix_audit_findings(project_id: str, kind: str, round_no: int) -> dict[
                 project = store.get_project(conn, project_id)
             await _record_licenses(ctx, project, policy)
             wsmod.commit_all(ctx.ws, "第三者のライセンスの記録")
-        out = await fixmod.fix_findings(ctx, findings, kind=kind, round_no=round_no, cycle=cycle)
+        handed_claims = [{k: c.get(k) for k in ("claim_id", "claim_text", "is_primary", "status", "limitations")} for c in claims]
+        out = await fixmod.fix_findings(ctx, findings, kind=kind, round_no=round_no, cycle=cycle, claims=handed_claims,
+                                        evidence=_audit_evidence(project_id, kind, round_no))
         with connect() as conn:
             conn.execute("""UPDATE audit_findings f SET status = 'fix_attempted' FROM audit_runs a
                             WHERE f.audit_run_id = a.id AND a.project_id = %s AND a.kind = %s AND a.round = %s
