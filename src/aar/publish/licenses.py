@@ -183,10 +183,10 @@ async def record_license_evidence(ws: Path, *, allowed_hosts: list[str], repo_li
                   "データと依存パッケージそのものは、このリポジトリに含めていない。",
           "repository_license": repo_license, "data": data, "dependencies": dependencies}
     (ws / "docs").mkdir(exist_ok=True)
-    (ws / EVIDENCE_JSON).write_text(json.dumps(ev, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    (ws / EVIDENCE_MD).write_text(render(ev), encoding="utf-8")
+    (ws / EVIDENCE_JSON).write_text(json.dumps(ev, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    (ws / EVIDENCE_MD).write_text(render(ev), encoding="utf-8", newline="\n")
     digest_path(ws).parent.mkdir(parents=True, exist_ok=True)
-    digest_path(ws).write_text(hashlib.sha256((ws / EVIDENCE_JSON).read_bytes()).hexdigest() + "\n", encoding="utf-8")
+    digest_path(ws).write_text(hashlib.sha256((ws / EVIDENCE_JSON).read_bytes()).hexdigest() + "\n", encoding="utf-8", newline="\n")
     return {"recorded": True, "unchanged": False,
             "unconfirmed": [str(x.get("filename") or x.get("name")) for x in data + dependencies if not x.get("confirmed")]}
 

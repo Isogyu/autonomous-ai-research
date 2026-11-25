@@ -59,6 +59,50 @@ def migrate(url: str | None = None) -> list[str]:
     return applied
 
 
+def pending_migrations(url: str | None = None) -> list[str]:
+    """まだ適用していない移行の名前（読むだけ。アプリ用の権限でも呼べる）。"""
+    names = sorted(f.name for f in resources.files("aar.db").joinpath("migrations").iterdir() if f.name.endswith(".sql"))
+    with connect(url, vector=False) as conn:
+        if not conn.execute("SELECT to_regclass('public.schema_migrations') AS t").fetchone()["t"]:   # type: ignore[index]
+            return names
+        done = {r["name"] for r in conn.execute("SELECT name FROM schema_migrations")}
+    return [n for n in names if n not in done]
+
+
+# 追記だけの表（改善の台帳の評価計画・実行・判定・操作の記録）と、移行の記録
+APPEND_ONLY_TABLES = ("improvement_eval_plans", "improvement_runs", "improvement_decisions", "improvement_events")
+APP_ROLE = "aar_app"
+
+
+def setup_app_role(owner_url: str, password: str) -> dict[str, Any]:
+    """アプリの実行用の役割（aar_app）を用意し、権限を付け直す。表の所有者の接続で呼ぶ。何度呼んでもよい。
+
+    表の所有者（移行を適用する役割）は、追記だけの表のトリガーを無効にも削除にもできる。アプリを所有者の権限で
+    動かすと、保護は「UPDATE と DELETE の拒否」までになる。実行用の役割を分け、追記だけの表には SELECT と INSERT
+    だけを許すと、アプリの権限では、書き換えも、トリガーの無効化・削除も、TRUNCATE もできない。
+    """
+    from psycopg import sql
+
+    role = sql.Identifier(APP_ROLE)
+    with psycopg.connect(owner_url, autocommit=True, row_factory=dict_row) as conn:
+        exists = conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (APP_ROLE,)).fetchone()
+        opts = sql.SQL("LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD {}").format(sql.Literal(password))
+        conn.execute(sql.SQL("{} ROLE {} {}").format(sql.SQL("ALTER" if exists else "CREATE"), role, opts))
+        db = conn.execute("SELECT current_database() AS d").fetchone()["d"]   # type: ignore[index]
+        conn.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(sql.Identifier(db), role))
+        conn.execute(sql.SQL("REVOKE CREATE ON SCHEMA public FROM {}").format(role))
+        conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(role))
+        conn.execute(sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {}").format(role))
+        conn.execute(sql.SQL("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {}").format(role))
+        protected = [t for t in (*APPEND_ONLY_TABLES, "schema_migrations")
+                     if conn.execute("SELECT to_regclass(%s) AS t", (f"public.{t}",)).fetchone()["t"]]   # type: ignore[index]
+        for t in protected:
+            conn.execute(sql.SQL("REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON {} FROM {}").format(sql.Identifier(t), role))
+        if "schema_migrations" in protected:
+            conn.execute(sql.SQL("REVOKE INSERT ON schema_migrations FROM {}").format(role))
+    return {"role": APP_ROLE, "database": db, "created": not exists, "append_only": [t for t in protected if t != "schema_migrations"]}
+
+
 def fetch_all(conn: psycopg.Connection, sql: str, params: Any = None) -> list[dict[str, Any]]:
     return list(conn.execute(sql, params))  # type: ignore[arg-type]
 

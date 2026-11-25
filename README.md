@@ -36,10 +36,17 @@
 | 独立監査 | Codex（`codex exec`） | 対象の複製を読み、生データから再計算する |
 | 研究エンジン | 内蔵（事前登録つきの仮説検証） | AI Scientist v3 はアダプターのみで未接続（[ADR-0003](docs/adr/0003-research-engine.md)） |
 | 研究記憶 | PostgreSQL 17 + pgvector | キーワード・ベクトル・絞り込み・引用関係のハイブリッド検索 |
-| 実験の隔離 | Docker（代替として macOS の sandbox-exec） | ネットワークなし、読み取り専用（[ADR-0006](docs/adr/0006-security.md)） |
+| 実験の隔離 | Podman のコンテナ（移行中。旧環境は Docker と macOS の sandbox-exec） | ネットワークなし、読み取り専用。効いていることを検証した構成でだけ実行する（[ADR-0006](docs/adr/0006-security.md)、[ADR-0012](docs/adr/0012-windows-podman.md)） |
 | UI | FastAPI（サーバー側で描画）と CLI | `http://127.0.0.1:8765` |
 
 設計の理由は [docs/adr/](docs/adr/) に、全体の説明は [docs/architecture.md](docs/architecture.md) にある。
+
+## 動かす環境
+
+開発と運用の対象を、macOS と Docker から、Windows と Podman へ移している途中（[ADR-0012](docs/adr/0012-windows-podman.md)）。
+**Windows の実機では、まだ確かめていない。** Windows の手順は [docs/windows/setup.md](docs/windows/setup.md)（準備と診断）、
+[docs/windows/operations.md](docs/windows/operations.md)（起動・停止・復旧）、[docs/windows/migration.md](docs/windows/migration.md)（バックアップ・切替・切戻し）。
+下の「必要なもの」「導入」は、旧環境（macOS）のもの。旧環境でこの版のコードを動かすときは、`.env` に `AAR_CONTAINER_ENGINE=docker` を書く。
 
 ## 必要なもの
 

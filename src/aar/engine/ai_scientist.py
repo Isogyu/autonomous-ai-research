@@ -22,7 +22,6 @@ AGENTIC_TEMP_ROOT を実在のディレクトリに向ける必要がある（�
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import shutil
@@ -30,6 +29,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from aar import proc
 
 PINNED_COMMIT = "f8ae47d"   # 2026-11-23 に内容を調べたコミット
 
@@ -64,18 +65,18 @@ def build_task_dir(task_dir: Path, *, goal: str, rubrics: list[str], evaluate_py
     """上流の決まりに沿ったタスクディレクトリを作る。"""
     (task_dir / "program_0" / "src").mkdir(parents=True, exist_ok=True)
     rub = "\n".join(f"- {r}" for r in rubrics)
-    (task_dir / "task.md").write_text(f"# Goal\n\n{goal}\n\n# Rubrics\n\n{rub}\n", encoding="utf-8")
-    (task_dir / "evaluate.py").write_text(evaluate_py, encoding="utf-8")
-    (task_dir / "capture.py").write_text(capture_py, encoding="utf-8")
+    (task_dir / "task.md").write_text(f"# Goal\n\n{goal}\n\n# Rubrics\n\n{rub}\n", encoding="utf-8", newline="\n")
+    (task_dir / "evaluate.py").write_text(evaluate_py, encoding="utf-8", newline="\n")
+    (task_dir / "capture.py").write_text(capture_py, encoding="utf-8", newline="\n")
     (task_dir / "program_0" / "program_spec.toml").write_text(
         f'schema_version = 1\ncode_root = "src"\n\n[entrypoint]\npath = "{entrypoint}"\nlanguage = "python"\ntype = "script"\n',
-        encoding="utf-8")
+        encoding="utf-8", newline="\n")
     for rel, text in program_files.items():
         p = task_dir / "program_0" / "src" / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text, encoding="utf-8")
+        p.write_text(text, encoding="utf-8", newline="\n")
     if requirements:
-        (task_dir / "requirements.txt").write_text(requirements, encoding="utf-8")
+        (task_dir / "requirements.txt").write_text(requirements, encoding="utf-8", newline="\n")
 
 
 def investigate_command(ais_dir: Path, task_dir: Path, run_dir: Path, limits: AisLimits, *, resume: bool) -> list[str]:
@@ -106,33 +107,13 @@ async def run_investigation(ais_dir: Path, task_dir: Path, run_dir: Path, limits
     tmp_root.mkdir(parents=True, exist_ok=True)
     env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")} | {
         "HEADLESS_BILLING": "subscription", "AGENTIC_TEMP_ROOT": str(tmp_root.resolve())}
-    proc = await asyncio.create_subprocess_exec(
-        *investigate_command(ais_dir, task_dir, run_dir, limits, resume=resume), cwd=str(ais_dir), env=env,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
-    comm = asyncio.ensure_future(proc.communicate())
     hard_limit = limits.run_timeout_seconds * (limits.max_idea_cycles + 1)
-    waited = 0
-    try:
-        while not comm.done():
-            await asyncio.wait({comm}, timeout=15)
-            waited += 15
-            if heartbeat:
-                heartbeat()
-            if waited > hard_limit:
-                break
-    finally:
-        if not comm.done():
-            try:
-                os.killpg(proc.pid, 15)   # 上流は SIGTERM で子プロセス群を止めてから抜ける
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(asyncio.shield(comm), timeout=30)
-            except (TimeoutError, asyncio.CancelledError):
-                pass
-    out = comm.result()[0].decode(errors="replace") if comm.done() and not comm.cancelled() else ""
-    (run_dir / "aar_stdout.log").write_text(out[-200000:], encoding="utf-8") if run_dir.exists() else None
-    return read_results(run_dir) | {"returncode": proc.returncode, "resumed": resume}
+    # 上流は SIGTERM で子プロセス群を止めてから抜ける（POSIX）。Windows では Job ごと終了させる
+    r = await proc.run(investigate_command(ais_dir, task_dir, run_dir, limits, resume=resume), cwd=ais_dir, env=env,
+                       timeout_s=hard_limit, heartbeat=heartbeat, poll_s=15, grace_s=30, merge_stderr=True)
+    out = "" if r.timed_out else r.stdout
+    (run_dir / "aar_stdout.log").write_text(out[-200000:], encoding="utf-8", newline="\n") if run_dir.exists() else None
+    return read_results(run_dir) | {"returncode": None if r.timed_out else r.returncode, "resumed": resume}
 
 
 def read_results(run_dir: Path) -> dict[str, Any]:

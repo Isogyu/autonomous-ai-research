@@ -15,12 +15,14 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from aar.agents.runner import AgentRunner, wrap_untrusted
 from aar.models import AgentResult, AuditClaim, AuditFinding, AuditReport, RecomputedMetric
+from aar.workspace import GIT_SAFE
 
 CLAIM_STATUSES = {"verified": "Verified", "supported": "Supported", "inconclusive": "Inconclusive",
                   "contradicted": "Contradicted", "not tested": "Not Tested", "not_tested": "Not Tested"}
@@ -59,11 +61,14 @@ def skill_available(skill_dir: Path) -> bool:
     return (skill_dir / "SKILL.md").is_file()
 
 
+_VENV_PYTHON = "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+
+
 def snapshot_target(ws: Path, dest: Path) -> str:
     """監査対象を複製する。監査中に対象が変わらないよう、コミット済みの状態だけを写す。"""
     if dest.exists():
         shutil.rmtree(dest)
-    subprocess.run(["git", "clone", "--no-hardlinks", "--quiet", str(ws), str(dest)], check=True, capture_output=True, timeout=600)
+    subprocess.run(["git", "-c", "core.autocrlf=false", "clone", "--no-hardlinks", "--quiet", str(ws), str(dest)], check=True, capture_output=True, timeout=600)
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=dest, capture_output=True, text=True, check=True).stdout.strip()
     # 研究側の結論を含む文書は監査担当に見せない（独立した再計算の妨げになるため）。
     # 除いた状態を複製の中でコミットし、「追跡ファイルが消えている」という見え方にならないようにする。
@@ -72,7 +77,7 @@ def snapshot_target(ws: Path, dest: Path) -> str:
     for rel in removed:
         shutil.rmtree(dest / rel, ignore_errors=True)
     if removed:
-        run = lambda *a: subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=audit-snapshot",  # noqa: E731
+        run = lambda *a: subprocess.run(["git", *GIT_SAFE, "-c", "user.name=audit-snapshot",  # noqa: E731
                                          "-c", "user.email=audit-snapshot@example.invalid", *a], cwd=dest,
                                         capture_output=True, timeout=120)
         run("add", "-A")
@@ -94,13 +99,13 @@ def prepare_audit_python(target: Path, round_dir: Path) -> str | None:
     venv = round_dir / "venv"
     try:
         subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, capture_output=True, timeout=300)
-        subprocess.run([str(venv / "bin" / "python"), "-m", "pip", "install", "--quiet", "--only-binary", ":all:",
+        subprocess.run([str(venv / _VENV_PYTHON), "-m", "pip", "install", "--quiet", "--only-binary", ":all:",
                         "--disable-pip-version-check", "-r", str(req), "pytest"],
                        check=True, capture_output=True, timeout=1200)
     except (subprocess.SubprocessError, OSError):
         shutil.rmtree(venv, ignore_errors=True)
         return None
-    return str(venv / "bin" / "python")
+    return str(venv / _VENV_PYTHON)
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -240,10 +245,10 @@ async def run_research_audit(
         # 本文は監査の作業場所の外（公開候補に写されない場所）に置く。再配布しないため
         (round_dir / "sources").mkdir(exist_ok=True)
         fulltext_path = round_dir / "sources" / "paper_fulltext.txt"
-        fulltext_path.write_text(fulltext, encoding="utf-8")
+        fulltext_path.write_text(fulltext, encoding="utf-8", newline="\n")
     (audit_dir / "source_evidence").mkdir()
     (audit_dir / "source_evidence" / "paper_record.json").write_text(
-        json.dumps(paper_record or {"note": "原論文の記録なし"}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        json.dumps(paper_record or {"note": "原論文の記録なし"}, ensure_ascii=False, indent=2, default=str), encoding="utf-8", newline="\n")
     prereg_files = sorted(str(p.relative_to(target)) for p in (target / "prereg").glob("*.json")) if (target / "prereg").exists() else []
     for name in ("claims.csv", "evidence.csv", "issues.csv", "recomputed_metrics.csv"):
         src = skill_dir / "assets" / name
@@ -286,5 +291,5 @@ async def run_research_audit(
         research_verdict=s.get("research_verdict", ""), publication_verdict=s.get("publication_verdict", ""),
         claims=claims, findings=findings, recomputed=recomputed, checks=checks, summary=summary,
         report_dir=str(audit_dir), execution_mode=mode, cost_usd=res.cost_usd)  # type: ignore[arg-type]
-    (audit_dir / "structured_report.json").write_text(json.dumps(report.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    (audit_dir / "structured_report.json").write_text(json.dumps(report.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8", newline="\n")
     return report, res, commit

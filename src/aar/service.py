@@ -257,7 +257,7 @@ async def ensure_schedules() -> list[str]:
         try:
             await client.create_schedule(sid, Schedule(
                 action=ScheduleActionStartWorkflow(wf, id=sid, task_queue=queue, execution_timeout=timedelta(hours=3)),
-                spec=ScheduleSpec(calendars=[cal], time_zone_name="Asia/Tokyo"),
+                spec=ScheduleSpec(calendars=[cal], time_zone_name=get_settings().timezone or "Asia/Tokyo"),
                 policy=SchedulePolicy(overlap=ScheduleOverlapPolicy.SKIP, catchup_window=catchup)))
             created.append(sid)
         except ScheduleAlreadyRunningError:
