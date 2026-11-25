@@ -320,3 +320,23 @@ def test_cycle_stops_instead_of_weakening_isolation_or_generating_unisolated(aut
         # 隔離を求める計画のもとでは、別プロセスでの実行が 1 件もない（切り替えていない）
         assert runs and all(r["isolation"] == "podman" and r["status"] == "failed" and r["failure_kind"] == "isolation_unavailable" for r in runs)
     config.get_settings.cache_clear()
+
+
+async def test_scheduled_activity_runs_one_cycle_as_the_scheduler_and_schedule_is_off_by_default(auto_env, monkeypatch):
+    """定期の実行が呼ぶ処理（Temporal のアクティビティ）。1 巡を別のスレッドで進め、操作主体は scheduler として残る。"""
+    from temporalio.testing import ActivityEnvironment
+
+    from aar import config
+    from aar.db.core import connect, fetch_all
+    from aar.temporal import activities, workflows
+
+    script = Script(IDEAS, {"log_excerpt": BETTER, "fix_context": GOOD})
+    monkeypatch.setattr(activities, "runners_for", lambda mode: {"claude": script, "codex": script})
+    out = await ActivityEnvironment().run(activities.improvement_cycle)
+    assert set(out) == {"plans", "generated", "decided", "stopped", "adopt_candidates"} and out["adopt_candidates"] == []
+    assert len(out["decided"]) == 2 and all(d["verdict"] == "on_hold" for d in out["decided"])
+    with connect() as conn:
+        actors = {r["actor_kind"] for r in fetch_all(conn, "SELECT actor_kind FROM improvement_events WHERE event IN ('proposed', 'cycle_completed')")}
+    assert actors == {"scheduler"}                                               # 人の操作として記録しない
+    assert workflows.ImprovementWorkflow in workflows.ALL_WORKFLOWS and activities.improvement_cycle in activities.ALL_ACTIVITIES
+    assert config.get_settings().improve_auto is False                           # 定期の実行は、人が有効にするまで登録されない
