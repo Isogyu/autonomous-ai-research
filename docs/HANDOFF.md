@@ -1,9 +1,9 @@
-# 引き継ぎ（2026-11-26 の時点）
+# 引き継ぎ（2026-11-25 の時点）
 
 次のセッションが、この文書と `docs/STATUS.md` だけで作業を続けられるように書いた。
 経緯と実測の詳細は `docs/STATUS.md`（「品質の強化と実地検証」の 1〜11 節）と `docs/adr/` にある。ここには、いまの状態と、次にやることだけを書く。
 
-**方針の変更（2026-11-26、利用者の指示）**: 開発と運用の対象を、macOS から社内の Windows PC へ移す。コンテナは Docker ではなく Podman。
+**方針の変更（2026-11-25、利用者の指示）**: 開発と運用の対象を、macOS から社内の Windows PC へ移す。コンテナは Docker ではなく Podman。
 macOS 向けの追加の開発と実地検証は止め、Windows への移行を優先する。Mac の研究の原本、DB、実験結果、未追跡のファイルは削除しない。
 稼働中のサービスを無断で止めない。移行の状態は `docs/STATUS.md` の 12 節、設計は `docs/adr/0012-windows-podman.md`。
 
@@ -14,7 +14,7 @@ macOS 向けの追加の開発と実地検証は止め、Windows への移行を
 | PR | 内容 | 状態 |
 |---|---|---|
 | #1〜#10 | 初期実装から、ライセンスの記録の定型文の修正まで | すべて `main` に統合済み（`3a7ef51`）。`main` の CI は成功 |
-| #11 | 基盤の改善候補の台帳と比較評価（`feat/improvement-loop` → `main`） | **未レビュー・未マージ**（2026-11-26 に確認。CI は成功） |
+| #11 | 基盤の改善候補の台帳と比較評価（`feat/improvement-loop` → `main`） | **未レビュー・未マージ**（2026-11-25 に確認。CI は成功） |
 | #12 | Windows と Podman への移行（`feat/windows-podman` → `feat/improvement-loop`。#11 の上に積んだ） | **未レビュー・未マージ**。CI の 3 経路は成功。**実機では未確認**。この文書の更新もこのブランチにある |
 
 #12 は #11 の評価器（`src/aar/improve/`）を変えるので、#11 に依存する。マージの順は #11 → #12（#12 の向き先は、#11 のマージ後に `main` へ変える）。
@@ -102,7 +102,7 @@ macOS 向けの追加の開発と実地検証は止め、Windows への移行を
 - **旧環境（Mac）でこのブランチのコードを動かすとき**: `.env` に `AAR_CONTAINER_ENGINE=docker` を書いてからワーカーを入れ替える。書かないと Podman を探し、実験を拒否する（Docker には黙って戻らない）。稼働中のワーカーは `3a7ef51`（`main`）のままで、影響を受けていない。
 - **起動と診断（Mac）**: `scripts/aarctl start` / `status` / `restart-worker`、`.venv/bin/aar doctor`。コードを変えたらワーカーを入れ替える（実行中の研究があっても続きから進む）。
 - **テスト**: `AAR_TEST_DATABASE_URL=postgresql://aar:aar@127.0.0.1:55432/aar_test .venv/bin/pytest -q`（このブランチは 161 件、約 8 分）。DB なしなら 30 秒ほど。
-  実物の Podman は `AAR_PODMAN_TESTS=1 AAR_TEST_IMAGE=<ダイジェストつき> pytest -m podman`。2026-11-26 の時点で、Mac の Docker は止まっていて、Mac では DB を使うテストを動かしていない。
+  実物の Podman は `AAR_PODMAN_TESTS=1 AAR_TEST_IMAGE=<ダイジェストつき> pytest -m podman`。2026-11-25 の時点で、Mac の Docker は止まっていて、Mac では DB を使うテストを動かしていない。
 - **この作業の作業ツリー**: `feat/windows-podman` は、セッションの一時領域の worktree で作った（消えていても、ブランチは GitHub にある）。
 - **研究の確認**: `aar projects list` / `show <id>` / `required-check <id>`、`aar limits`。監査の記録は `workspaces/<id>/audits/`、提出直前の検査は `audits/final_check.json`。
 - **公開用の複製**: コミットの新旧の対応は `workspaces/PC-…/commit_map.tsv`（非公開。リポジトリの外）。

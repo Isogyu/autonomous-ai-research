@@ -1,6 +1,6 @@
 # ADR-0012: 社内の Windows PC と Podman への移行 — 実行方式、隔離、プロセスの管理
 
-- 日付: 2026-11-26
+- 日付: 2026-11-25
 - 状態: 提案。**実行方式（下の A / B）は未確定**（社内での WSL2・Hyper-V・Podman の許可が未確認）。
   コードは A・B のどちらでも動く形で用意した。Windows の実機と、Windows 上の Podman では、まだ何も確かめていない。
 
@@ -26,7 +26,7 @@
 
 - **第一候補は A**。理由: 基盤の主経路（POSIX のプロセス管理、Podman のローカル接続、パスの扱い）が Linux と同じになり、
   確かめる範囲が狭い。Claude Code の公式の要件でも、OS によるサンドボックスはネイティブの Windows では使えず、WSL2 では使える
-  （候補を作る側の隔離の前提になる。2026-11-26 に https://code.claude.com/docs/en/setup を確認）。
+  （候補を作る側の隔離の前提になる。2026-11-25 に https://code.claude.com/docs/en/setup を確認）。
 - B のとき、Podman Desktop の公式の手順では、仮想環境の提供元は WSL2 か Hyper-V の 2 つ。WSL2 が不可なら Hyper-V が要る
   （Windows の Pro / Enterprise、Hyper-V の有効化と仮想環境の作成に管理者権限）。Hyper-V も使えるとは決めつけない。
 - どちらも許可されない場合に、「別プロセスだけの実行」へ自動で切り替えることはしない。実装上も、切り替える経路はない（下の 3）。
@@ -141,7 +141,7 @@
 
 CI の結果は、PR の説明に書く。**移行は完了していない。** 長期の無人運転は、この移行では承認しない。
 
-## 参照した公式の情報（2026-11-26 に確認）
+## 参照した公式の情報（2026-11-25 に確認）
 
 - Podman Desktop の Windows への導入: https://podman-desktop.io/docs/installation/windows-install
   （Windows 10 ビルド 19043 以降か Windows 11。仮想環境に 6GB のメモリ。WSL2 か Hyper-V。機能の有効化と Hyper-V の仮想環境の作成に管理者権限）

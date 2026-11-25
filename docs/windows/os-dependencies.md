@@ -1,6 +1,6 @@
 # OS に依存していた箇所の一覧と、移行での扱い
 
-2026-11-26 に、PR #11（`feat/improvement-loop`、未マージ）の上で調べた。区分は次の 4 つ。
+2026-11-25 に、PR #11（`feat/improvement-loop`、未マージ）の上で調べた。区分は次の 4 つ。
 
 - **共通化**: macOS・Linux・Windows で同じコードが動くようにした。
 - **移植**: Windows と Podman 向けの実装を足した。

@@ -1,6 +1,6 @@
 # Windows と Podman: 日常の起動・停止・復旧
 
-**実機では未確認**（2026-11-26 時点）。`status` は CI の Windows で動かした。`start` と `stop` は、実機で最初に確かめる。
+**実機では未確認**（2026-11-25 時点）。`status` は CI の Windows で動かした。`start` と `stop` は、実機で最初に確かめる。
 WSL 方式でも、PowerShell からは同じ `scripts\aarctl.ps1` を使う（`AAR_WSL_DISTRO` と `AAR_WSL_REPO` を設定）。
 WSL の中からは `.venv/bin/python -m aar.cli ctl …`。
 
