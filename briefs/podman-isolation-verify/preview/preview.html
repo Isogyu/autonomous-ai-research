@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>発信のプレビュー: podman-isolation-verify</title><style>
+:root{color-scheme:light dark;--bg:#f5f5f3;--fg:#161616;--sub:#555;--panel:#fff;--line:#c9c9c9;--warn:#fff1c2;--warnfg:#4a3200}
+@media (prefers-color-scheme:dark){:root{--bg:#1b1b1a;--fg:#eeeeea;--sub:#b9b9b2;--panel:#262624;--line:#4a4a46;--warn:#4a3a00;--warnfg:#ffe9a8}}
+body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font-family:'Yu Gothic UI','Meiryo','Hiragino Sans','Noto Sans JP',sans-serif;line-height:1.7}
+main{max-width:1100px;margin:0 auto}h1{font-size:1.3rem}h2{font-size:1.05rem;margin-top:2rem;border-bottom:1px solid var(--line)}
+.note{background:var(--warn);color:var(--warnfg);padding:10px 14px;border-radius:8px}
+.frames{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}.frame{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}
+.frame h3{font-size:.85rem;color:var(--sub);margin:0 0 8px}.desk{width:min(100%,600px)}.mob{width:min(100%,336px)}
+.frame svg{width:100%;height:auto;display:block;border:1px solid var(--line)}pre{white-space:pre-wrap;word-break:break-word;font-family:inherit;margin:8px 0 0}
+table{border-collapse:collapse}td,th{border:1px solid var(--line);padding:4px 10px;text-align:left;vertical-align:top}
+details{margin-top:1rem}code,pre.code{font-family:ui-monospace,Consolas,monospace;font-size:.85rem}.detail{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px 20px}
+</style></head><body><main>
+<h1>発信のプレビュー: podman-isolation-verify</h1>
+<p class="note">これはローカルのプレビュー。<strong>Teams には送信していない。</strong>下の枠は幅を合わせた近似で、Teams の実際の表示ではない
+（Teams のデスクトップとモバイルでの表示、画像の取得、Adaptive Card の表示は、社内の環境で確かめる必要がある）。</p>
+<h2>レビューする人が見るもの</h2>
+<table><tr><th>状態</th><td>下書き</td></tr><tr><th>内容のハッシュ</th><td><code>2e5aafd1910eb989</code></td></tr>
+<tr><th>配信の扱い</th><td>candidate: 自分たちの実測があり、手順を共有できる。確かめた環境が限られる点は、検証の状況と制約に書いた</td></tr>
+<tr><th>対象の読者</th><td>社内の Windows PC で、AI が書いたコードをコンテナで動かそうとしている開発の担当 — コンテナに制限を指定しても、環境によっては効かない。効いているかを、動かす前に確かめる方法が要る</td></tr>
+<tr><th>読者のニーズ</th><td>AI が書いたコードをコンテナで動かしたい開発の担当は、指定した制限が、自分の環境で実際に効いているかを確かめたい。それは、効いていない環境で、隔離できたつもりでコードを動かさずに済む。<br>根拠: 仮定（読者に確かめていない） — 読者に確かめていない。コンテナを使う読者がいるか、ここまでの手順を必要とするかは、docs/briefs/reader-needs.md の質問で確かめる</td></tr>
+<tr><th>既存の情報からの変化</th><td>これまでは、制限を指定したことをもって隔離できたと扱っていた。指定が効かない構成があるので、中から確かめる手順を足した</td></tr><tr><th>今知らせる理由</th><td>コンテナの実行を Docker から Podman に替える準備をしている。替えるだけでは隔離は成立しないので、確かめ方を先に共有する</td></tr>
+<tr><th>似た投稿</th><td>ai-code-where-to-run（方式の比較（ai-code-where-to-run）と出典が重なる。こちらは、確かめる手順と自分たちの実測）</td></tr></table>
+<h3>機械的な確認</h3><table><tr><th></th><th>項目</th><th>結果</th></tr><tr><td>✓</td><td>カードに収まる（文字の大きさの下限を保つ）</td><td>文字の下限 32、幅 1024</td></tr><tr><td>✓</td><td>Adaptive Card の大きさが上限以内</td><td>2315 バイト（上限 28672）</td></tr><tr><td>✓</td><td>秘密情報・作業用のパスがない</td><td>検出なし（既知の形式の照合。未知の形式は見つけられない）</td></tr><tr><td>✓</td><td>メールアドレスがない</td><td>検出なし</td></tr><tr><td>✗</td><td>第三者の文章を、まとまった長さで写していない</td><td>照合元の文章が手元にない（briefs/&lt;id&gt;/sources/*.txt に置くと照合する）。置けない場合は、承認する人が確かめて申告する</td></tr><tr><td>✓</td><td>要点と制約が、本文と詳細ページの両方にある</td><td>すべてある</td></tr><tr><td>✓</td><td>「自環境で検証済み」が、カード・本文・詳細ページのすべてにある</td><td>表示あり</td></tr><tr><td>✓</td><td>「試す」が、カード・本文・詳細ページのすべてにある</td><td>表示あり</td></tr><tr><td>✓</td><td>出典の一覧にない URL が出力にない</td><td>なし</td></tr></table>
+<h3>人に見てほしい点</h3><ul><li>読者のニーズは仮定（読者に確かめていない）。読者に確かめていない。コンテナを使う読者がいるか、ここまでの手順を必要とするかは、docs/briefs/reader-needs.md の質問で確かめる</li><li>全文を読んでいない出典がある: podman-run（Podman の公式の文書）</li></ul>
+<h2>Teams の投稿（近似）</h2>
+<div class="frames"><div class="frame desk"><h3>デスクトップの幅（約 600px）</h3><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1000" width="1024" height="1000" role="img" aria-label="試す・自環境で検証済み。コンテナの隔離が効いているか、中から確かめる。図: 隔離を、どう確かめるか（内容は本文に文章で記載）" font-family="'Yu Gothic UI','Meiryo','Hiragino Sans','Noto Sans JP',sans-serif"><title>試す・自環境で検証済み。コンテナの隔離が効いているか、中から確かめる。図: 隔離を、どう確かめるか（内容は本文に文章で記載）</title><rect width="100%" height="100%" fill="#ffffff"/><rect x="56" y="56" width="104" height="56" rx="10" fill="#111111" stroke="#111111" stroke-width="3"/><text x="74" y="94" font-size="34" font-weight="700" fill="#ffffff" text-anchor="start">試す</text><rect x="176" y="56" width="308" height="56" rx="10" fill="#0b4f9e" stroke="#0b4f9e" stroke-width="3"/><text x="194" y="94" font-size="34" font-weight="700" fill="#ffffff" text-anchor="start">自環境で検証済み</text><text x="56" y="200" font-size="54" font-weight="700" fill="#111111" text-anchor="start">コンテナの隔離が効いているか、中</text><text x="56" y="262" font-size="54" font-weight="700" fill="#111111" text-anchor="start">から確かめる</text><text x="56" y="336" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="start">隔離を、どう確かめるか</text><rect x="56" y="354" width="912" height="64" rx="10" fill="#eef2f7"/><text x="86" y="400" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="middle">1</text><text x="120" y="400" font-size="36" font-weight="700" fill="#111111" text-anchor="start">イメージを取得して固定する</text><rect x="56" y="430" width="912" height="64" rx="10" fill="#eef2f7"/><text x="86" y="476" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="middle">2</text><text x="120" y="476" font-size="36" font-weight="700" fill="#111111" text-anchor="start">制限を指定して起動する</text><rect x="56" y="506" width="912" height="108" rx="10" fill="#eef2f7"/><text x="86" y="552" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="middle">3</text><text x="120" y="552" font-size="36" font-weight="700" fill="#111111" text-anchor="start">中から制限を確かめる</text><text x="120" y="596" font-size="32" font-weight="400" fill="#454545" text-anchor="start">通信・書き込み・上限・権限</text><rect x="56" y="626" width="912" height="64" rx="10" fill="#eef2f7"/><text x="86" y="672" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="middle">4</text><text x="120" y="672" font-size="36" font-weight="700" fill="#111111" text-anchor="start">通らなければ実行しない</text><rect x="56" y="726" width="912" height="168" rx="10" fill="#fff1c2" stroke="#4a3200" stroke-width="2"/><text x="76" y="772" font-size="34" font-weight="700" fill="#4a3200" text-anchor="start">条件・制約</text><text x="76" y="826" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">・確認は Linux だけ。Windows は未確認</text><text x="76" y="872" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">・手順のコードは未マージ（PR #12）</text><text x="56" y="958" font-size="32" font-weight="400" fill="#454545" text-anchor="start">出典: このリポジトリ（確認 2026-11-25） ほか 1 件</text></svg>
+<pre>【試す｜自環境で検証済み】コンテナの隔離が効いているか、中から確かめる
+
+要点
+・制限は、指定しただけでは効いたか分からない
+・コンテナの中から、通信・書き込み・上限を確かめる
+・確かめていない構成では、実行しない作りにした
+
+条件・制約
+・確認は Linux だけ。Windows は未確認
+・手順のコードは未マージ（PR #12）
+
+図の内容（隔離を、どう確かめるか）
+1. イメージを取得して固定する
+2. 制限を指定して起動する
+3. 中から制限を確かめる（通信・書き込み・上限・権限）
+4. 通らなければ実行しない
+
+検証の状況: 自環境で検証済み — このリポジトリの CI（Linux）で、コンテナの中から制限を確かめるテストを動かして通った。Windows では動かしていない
+確かめていない点: Windows 上の Podman の仮想環境で、同じ確認が通るか ／ クライアントとは別の場所で動く Podman で、作業用のフォルダーを渡せるか ／ 社内で Podman を使えるか
+
+対象: 社内の Windows PC で、AI が書いたコードをコンテナで動かそうとしている開発の担当
+出典
+・PR #12 の CI の実行（podman の経路）（このリポジトリ、一次情報、確認日 2026-11-25、対象の版: コミット 16abf79）https://github.com/Isogyu/autonomous-ai-research/actions/runs/45628443267
+・podman-run（Podman の公式の文書）（Podman、一次情報、確認日 2026-11-25、対象の版: latest（ページに版の記載なし）、一部を確認）https://docs.podman.io/en/latest/markdown/podman-run.1.html
+
+詳細: 詳細ページの保存先が未定（ローカルのプレビューだけがある）
+</pre></div><div class="frame mob"><h3>モバイルの幅（約 336px）</h3><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1000" width="1024" height="1000" role="img" aria-label="試す・自環境で検証済み。コンテナの隔離が効いているか、中から確かめる。図: 隔離を、どう確かめるか（内容は本文に文章で記載）" font-family="'Yu Gothic UI','Meiryo','Hiragino Sans','Noto Sans JP',sans-serif"><title>試す・自環境で検証済み。コンテナの隔離が効いているか、中から確かめる。図: 隔離を、どう確かめるか（内容は本文に文章で記載）</title><rect width="100%" height="100%" fill="#ffffff"/><rect x="56" y="56" width="104" height="56" rx="10" fill="#111111" stroke="#111111" stroke-width="3"/><text x="74" y="94" font-size="34" font-weight="700" fill="#ffffff" text-anchor="start">試す</text><rect x="176" y="56" width="308" height="56" rx="10" fill="#0b4f9e" stroke="#0b4f9e" stroke-width="3"/><text x="194" y="94" font-size="34" font-weight="700" fill="#ffffff" text-anchor="start">自環境で検証済み</text><text x="56" y="200" font-size="54" font-weight="700" fill="#111111" text-anchor="start">コンテナの隔離が効いているか、中</text><text x="56" y="262" font-size="54" font-weight="700" fill="#111111" text-anchor="start">から確かめる</text><text x="56" y="336" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="start">隔離を、どう確かめるか</text><rect x="56" y="354" width="912" height="64" rx="10" fill="#eef2f7"/><text x="86" y="400" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="middle">1</text><text x="120" y="400" font-size="36" font-weight="700" fill="#111111" text-anchor="start">イメージを取得して固定する</text><rect x="56" y="430" width="912" height="64" rx="10" fill="#eef2f7"/><text x="86" y="476" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="middle">2</text><text x="120" y="476" font-size="36" font-weight="700" fill="#111111" text-anchor="start">制限を指定して起動する</text><rect x="56" y="506" width="912" height="108" rx="10" fill="#eef2f7"/><text x="86" y="552" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="middle">3</text><text x="120" y="552" font-size="36" font-weight="700" fill="#111111" text-anchor="start">中から制限を確かめる</text><text x="120" y="596" font-size="32" font-weight="400" fill="#454545" text-anchor="start">通信・書き込み・上限・権限</text><rect x="56" y="626" width="912" height="64" rx="10" fill="#eef2f7"/><text x="86" y="672" font-size="36" font-weight="700" fill="#0b4f9e" text-anchor="middle">4</text><text x="120" y="672" font-size="36" font-weight="700" fill="#111111" text-anchor="start">通らなければ実行しない</text><rect x="56" y="726" width="912" height="168" rx="10" fill="#fff1c2" stroke="#4a3200" stroke-width="2"/><text x="76" y="772" font-size="34" font-weight="700" fill="#4a3200" text-anchor="start">条件・制約</text><text x="76" y="826" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">・確認は Linux だけ。Windows は未確認</text><text x="76" y="872" font-size="34" font-weight="400" fill="#4a3200" text-anchor="start">・手順のコードは未マージ（PR #12）</text><text x="56" y="958" font-size="32" font-weight="400" fill="#454545" text-anchor="start">出典: このリポジトリ（確認 2026-11-25） ほか 1 件</text></svg>
+<pre>【試す｜自環境で検証済み】コンテナの隔離が効いているか、中から確かめる
+
+要点
+・制限は、指定しただけでは効いたか分からない
+・コンテナの中から、通信・書き込み・上限を確かめる
+・確かめていない構成では、実行しない作りにした
+
+条件・制約
+・確認は Linux だけ。Windows は未確認
+・手順のコードは未マージ（PR #12）
+
+図の内容（隔離を、どう確かめるか）
+1. イメージを取得して固定する
+2. 制限を指定して起動する
+3. 中から制限を確かめる（通信・書き込み・上限・権限）
+4. 通らなければ実行しない
+
+検証の状況: 自環境で検証済み — このリポジトリの CI（Linux）で、コンテナの中から制限を確かめるテストを動かして通った。Windows では動かしていない
+確かめていない点: Windows 上の Podman の仮想環境で、同じ確認が通るか ／ クライアントとは別の場所で動く Podman で、作業用のフォルダーを渡せるか ／ 社内で Podman を使えるか
+
+対象: 社内の Windows PC で、AI が書いたコードをコンテナで動かそうとしている開発の担当
+出典
+・PR #12 の CI の実行（podman の経路）（このリポジトリ、一次情報、確認日 2026-11-25、対象の版: コミット 16abf79）https://github.com/Isogyu/autonomous-ai-research/actions/runs/45628443267
+・podman-run（Podman の公式の文書）（Podman、一次情報、確認日 2026-11-25、対象の版: latest（ページに版の記載なし）、一部を確認）https://docs.podman.io/en/latest/markdown/podman-run.1.html
+
+詳細: 詳細ページの保存先が未定（ローカルのプレビューだけがある）
+</pre></div></div>
+<h2>画像の代替テキスト</h2><p>試す・自環境で検証済み。コンテナの隔離が効いているか、中から確かめる。図: 隔離を、どう確かめるか（内容は本文に文章で記載）</p>
+<h2>詳細ページ（Markdown から表示。保存先は未定）</h2>
+<div class="detail"><h1>コンテナの隔離が効いているか、中から確かめる</h1>
+<p><strong>試す</strong>（自分の環境で試せるかが分かる）｜<strong>自環境で検証済み</strong></p>
+<h2>結論</h2>
+<p>コンテナの制限は、指定したあとに、コンテナの中から確かめられる。Linux の Podman では、確かめる手順が通った。Windows ではまだ確かめていない。</p>
+<h2>対象の読者</h2>
+<p>社内の Windows PC で、AI が書いたコードをコンテナで動かそうとしている開発の担当 — コンテナに制限を指定しても、環境によっては効かない。効いているかを、動かす前に確かめる方法が要る</p>
+<h2>適用の条件</h2>
+<ul>
+<li>AI が書いたコードを、Podman のコンテナで動かそうとしている</li>
+<li>Podman を使える環境がある（社内の Windows PC については、利用の可否が未確認）</li>
+</ul>
+<h2>重要な制約</h2>
+<ul>
+<li>確認は Linux だけ。Windows は未確認</li>
+<li>手順のコードは未マージ（PR #12）</li>
+</ul>
+<h2>要点</h2>
+<ul>
+<li>制限は、指定しただけでは効いたか分からない</li>
+<li>コンテナの中から、通信・書き込み・上限を確かめる</li>
+<li>確かめていない構成では、実行しない作りにした</li>
+</ul>
+<h2>隔離を、どう確かめるか</h2>
+<ul>
+<li>
+<ol>
+<li>イメージを取得して固定する</li>
+</ol>
+</li>
+<li>
+<ol>
+<li>制限を指定して起動する</li>
+</ol>
+</li>
+<li>
+<ol>
+<li>中から制限を確かめる（通信・書き込み・上限・権限）</li>
+</ol>
+</li>
+<li>
+<ol>
+<li>通らなければ実行しない</li>
+</ol>
+</li>
+</ul>
+<p>手順は 4 つ。まず、動かすイメージを取得して内容を固定する。次に、通信なし・読み取り専用・資源の上限を指定してコンテナを起動する。そのコンテナの中から、通信に出られないこと、書き込めないこと、上限の値、権限を確かめる。1 つでも通らなければ、その環境ではコードを実行しない。</p>
+<h2>必要な環境</h2>
+<p>Podman と、取得済みの Python のイメージ。このリポジトリの PR #12（未マージ）のコード。確かめたのは Linux だけ</p>
+<h2>手順</h2>
+<ol>
+<li>PR #12 のブランチ（feat/windows-podman）を取得する</li>
+<li>Python のイメージを取得し、ダイジェストつきの名前を控える</li>
+<li>隔離の検証のコマンド（aar podman verify）を実行する</li>
+<li>項目ごとの結果を読む。通らない項目があれば、指定を緩めずに、構成を見直す</li>
+</ol>
+<h2>結果</h2>
+<ul>
+<li>Linux の CI（Podman 5.7.0、rootless、cgroups v2）で、確認のテスト 5 件が通った</li>
+<li>PostgreSQL の起動・接続・停止も、同じ環境の Podman で通った</li>
+</ul>
+<h2>失敗した例・つまずいた点</h2>
+<ul>
+<li>テストが、イメージに元からある環境変数を、秘密情報の漏れと誤って判定した。判定の条件を直した</li>
+<li>Windows と、別の場所で動く Podman への接続は、試せる環境がなく、結果がない</li>
+</ul>
+<h2>検証の状況</h2>
+<p>自環境で検証済み: このリポジトリの CI（Linux）で、コンテナの中から制限を確かめるテストを動かして通った。Windows では動かしていない</p>
+<h3>自分たちの実測</h3>
+<ul>
+<li>環境: GitHub Actions の Linux の実行環境。Podman 5.7.0、rootless、cgroups v2、crun</li>
+<li>実施日: 2026-11-25</li>
+<li>結果: 隔離の確認のテスト 5 件がすべて通った。通信に出られない、ルートに書けない、上限の値が指定どおり、権限がない、root 以外で動く、時間切れのあとに何も残らない</li>
+<li>記録: PR #12 の CI の実行 45628443267（podman の経路）。テストは tests/test_podman_real.py</li>
+<li>手順:</li>
+<li>動かすイメージを取得し、ダイジェストで固定する</li>
+<li>通信なし・読み取り専用・資源の上限・権限の削除を指定して、コンテナを起動する</li>
+<li>コンテナの中から、通信、書き込み、上限の値、権限、利用者を調べる</li>
+<li>時間切れのあとに、コンテナとプロセスが残っていないことを調べる</li>
+<li>この実測が確かめていない範囲:</li>
+<li>Windows 上の Podman の仮想環境（WSL 2、Hyper-V）</li>
+<li>クライアントとは別の場所で動く Podman への接続</li>
+<li>rootful の構成</li>
+</ul>
+<h2>確かめていない点</h2>
+<ul>
+<li>Windows 上の Podman の仮想環境で、同じ確認が通るか</li>
+<li>クライアントとは別の場所で動く Podman で、作業用のフォルダーを渡せるか</li>
+<li>社内で Podman を使えるか</li>
+</ul>
+<h2>根拠の強さ</h2>
+<p>中程度: 自分たちの実測で、手順と記録が残っている。ただし環境は Linux の CI の 1 種類だけで、社内の Windows PC での結果ではない</p>
+<h2>出典</h2>
+<ul>
+<li>PR #12 の CI の実行（podman の経路）（このリポジトリ、一次情報、確認日 2026-11-25、対象の版: コミット 16abf79）https://github.com/Isogyu/autonomous-ai-research/actions/runs/45628443267 — 裏づけている内容: Linux の Podman 5.7.0（rootless、cgroups v2、crun）で、隔離の確認のテスト 5 件が通ったこと</li>
+<li>podman-run（Podman の公式の文書）（Podman、一次情報、確認日 2026-11-25、対象の版: latest（ページに版の記載なし）、一部を確認）https://docs.podman.io/en/latest/markdown/podman-run.1.html — 裏づけている内容: 資源の上限の指定が使えない構成があること（cgroups v1 の rootless）</li>
+</ul>
+<h2>この情報の位置づけ</h2>
+<ul>
+<li>既存の情報からの変化: これまでは、制限を指定したことをもって隔離できたと扱っていた。指定が効かない構成があるので、中から確かめる手順を足した</li>
+<li>今知らせる理由: コンテナの実行を Docker から Podman に替える準備をしている。替えるだけでは隔離は成立しないので、確かめ方を先に共有する</li>
+</ul>
+<h2>更新と訂正の履歴</h2>
+<ul>
+<li>更新日: 2026-11-25</li>
+<li>訂正: なし</li>
+</ul></div>
+<details><summary>Adaptive Card の JSON の下書き（2315 バイト。上限は 28672。未送信・表示は未確認）</summary>
+<pre class="code">{
+ &quot;type&quot;: &quot;message&quot;,
+ &quot;attachments&quot;: [
+  {
+   &quot;contentType&quot;: &quot;application/vnd.microsoft.card.adaptive&quot;,
+   &quot;contentUrl&quot;: null,
+   &quot;content&quot;: {
+    &quot;$schema&quot;: &quot;http://adaptivecards.io/schemas/adaptive-card.json&quot;,
+    &quot;type&quot;: &quot;AdaptiveCard&quot;,
+    &quot;version&quot;: &quot;1.5&quot;,
+    &quot;msteams&quot;: {
+     &quot;width&quot;: &quot;Full&quot;
+    },
+    &quot;body&quot;: [
+     {
+      &quot;type&quot;: &quot;TextBlock&quot;,
+      &quot;text&quot;: &quot;試す｜自環境で検証済み&quot;,
+      &quot;wrap&quot;: true,
+      &quot;weight&quot;: &quot;Bolder&quot;,
+      &quot;isSubtle&quot;: true
+     },
+     {
+      &quot;type&quot;: &quot;TextBlock&quot;,
+      &quot;text&quot;: &quot;コンテナの隔離が効いているか、中から確かめる&quot;,
+      &quot;wrap&quot;: true,
+      &quot;size&quot;: &quot;Large&quot;,
+      &quot;weight&quot;: &quot;Bolder&quot;
+     },
+     {
+      &quot;type&quot;: &quot;TextBlock&quot;,
+      &quot;text&quot;: &quot;- 制限は、指定しただけでは効いたか分からない\n- コンテナの中から、通信・書き込み・上限を確かめる\n- 確かめていない構成では、実行しない作りにした&quot;,
+      &quot;wrap&quot;: true
+     },
+     {
+      &quot;type&quot;: &quot;TextBlock&quot;,
+      &quot;text&quot;: &quot;条件・制約&quot;,
+      &quot;wrap&quot;: true,
+      &quot;weight&quot;: &quot;Bolder&quot;
+     },
+     {
+      &quot;type&quot;: &quot;TextBlock&quot;,
+      &quot;text&quot;: &quot;- 確認は Linux だけ。Windows は未確認\n- 手順のコードは未マージ（PR #12）&quot;,
+      &quot;wrap&quot;: true
+     },
+     {
+      &quot;type&quot;: &quot;TextBlock&quot;,
+      &quot;text&quot;: &quot;図の内容（隔離を、どう確かめるか）&quot;,
+      &quot;wrap&quot;: true,
+      &quot;weight&quot;: &quot;Bolder&quot;
+     },
+     {
+      &quot;type&quot;: &quot;TextBlock&quot;,
+      &quot;text&quot;: &quot;- 1. イメージを取得して固定する\n- 2. 制限を指定して起動する\n- 3. 中から制限を確かめる（通信・書き込み・上限・権限）\n- 4. 通らなければ実行しない&quot;,
+      &quot;wrap&quot;: true
+     },
+     {
+      &quot;type&quot;: &quot;TextBlock&quot;,
+      &quot;text&quot;: &quot;検証の状況: 自環境で検証済み — このリポジトリの CI（Linux）で、コンテナの中から制限を確かめるテストを動かして通った。Windows では動かしていない&quot;,
+      &quot;wrap&quot;: true
+     },
+     {
+      &quot;type&quot;: &quot;TextBlock&quot;,
+      &quot;text&quot;: &quot;確かめていない点: Windows 上の Podman の仮想環境で、同じ確認が通るか ／ クライアントとは別の場所で動く Podman で、作業用のフォルダーを渡せるか ／ 社内で Podman を使えるか&quot;,
+      &quot;wrap&quot;: true,
+      &quot;isSubtle&quot;: true
+     },
+     {
+      &quot;type&quot;: &quot;TextBlock&quot;,
+      &quot;text&quot;: &quot;対象: 社内の Windows PC で、AI が書いたコードをコンテナで動かそうとしている開発の担当&quot;,
+      &quot;wrap&quot;: true,
+      &quot;isSubtle&quot;: true
+     }
+    ],
+    &quot;actions&quot;: [
+     {
+      &quot;type&quot;: &quot;Action.OpenUrl&quot;,
+      &quot;title&quot;: &quot;一次情報を開く&quot;,
+      &quot;url&quot;: &quot;https://github.com/Isogyu/autonomous-ai-research/actions/runs/45628443267&quot;
+     }
+    ]
+   }
+  }
+ ]
+}</pre></details>
+</main></body></html>

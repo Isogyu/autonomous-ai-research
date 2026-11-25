@@ -1,0 +1,60 @@
+id: claude-code-windows-sandbox
+purpose: know
+verification: introduced_unreproduced
+verification_basis: 提供元の公式の文書を読んだだけ。自分たちは Windows で動かしていない
+audience:
+  segment: 社内の Windows PC で、AI のコーディング支援を試そうとしている開発の担当
+  relevance: 社内の PC は Windows。導入の形（Windows に直接か、WSL 2 か）で、使える機能が変わる
+  need:
+    who: 社内の Windows PC で AI のコーディング支援を試したい開発の担当
+    wants_to: 導入の形を決める前に、形によって何が変わるかを把握したい
+    so_that: 申請や環境の準備をやり直さずに済む
+    evidence: assumed
+    evidence_note: 読者に確かめていない。この読者がいるか、何に困っているかは、docs/briefs/reader-needs.md の質問で確かめる
+headline: Claude Code は Windows で動く。隔離は WSL 2 だけ
+takeaways:
+  - Windows 10 1809 以降なら、Windows に直接入れられる
+  - OS によるサンドボックスは WSL 2 でだけ対応
+  - Windows に直接入れる場合は Git for Windows が推奨
+constraints:
+  - 社内で Claude Code と WSL 2 を使えるかは未確認
+  - サンドボックスの制限の範囲は、まだ読んでいない
+unconfirmed:
+  - 社内で Claude Code と WSL 2 の利用が許可されているか
+  - サンドボックスが制限する範囲（ファイル、通信）。該当する文書を読んでいない
+  - 自分たちの Windows PC での動作
+change: 「Windows では WSL が必要」という理解は古い。Windows に直接入れられるが、サンドボックスの対応は導入の形で違う
+why_now: 開発の対象を社内の Windows PC に移す準備を始めた。導入の形を決める前に知っておく必要がある
+evidence_strength: moderate
+evidence_strength_note: 提供元の公式の文書（一次情報）で、内容は明確。ただし自分たちでは確かめておらず、文書に更新日の記載がない
+sources:
+  - title: Advanced setup（Claude Code Docs）
+    url: https://code.claude.com/docs/en/setup
+    publisher: Anthropic
+    kind: primary
+    checked_on: 2026-11-25
+    version: ページに更新日と版の記載なし（文中の例は 2.1.89、2.1.211、2.1.323）
+    supports: Windows の要件、Windows に直接と WSL 2 と WSL 1 のサンドボックスの対応、Git for Windows の扱い、導入の方法
+diagram:
+  kind: comparison
+  question: 導入の形で、何が変わるか
+  columns: [サンドボックス, Git の追加]
+  rows:
+    - {label: Windows に直接, cells: [非対応, 推奨]}
+    - {label: WSL 2, cells: [対応, 不要]}
+    - {label: WSL 1, cells: [非対応, 不要]}
+  long_description: 公式の文書の表によると、OS によるサンドボックスに対応するのは WSL 2 だけで、Windows に直接入れた場合と WSL 1 は対応していない。Git for Windows は、Windows に直接入れる場合に推奨されている（無い場合は PowerShell が使われる）。WSL では不要。
+detail:
+  conclusion: Claude Code は Windows 10 1809 以降に直接入れられる。ただし、OS によるサンドボックスに対応するのは WSL 2 に入れた場合だけ。
+  applies_when:
+    - 社内の Windows PC で Claude Code を使うことを検討している
+    - 導入の形（Windows に直接か、WSL 2 か）をまだ決めていない
+  overview: 公式の文書は、Windows での導入の形として、Windows に直接、WSL 2、WSL 1 を挙げ、それぞれのサンドボックスの対応を表で示している。導入の方法は、PowerShell のインストーラー、WinGet、npm、WSL の中での Linux 向けの方法。
+  confirmed_scope:
+    - 2026-11-25 に、公式の文書の該当のページを読んだ
+    - 読んだのは導入のページだけ。サンドボックスの仕組みを説明するページは読んでいない
+    - 自分たちの PC では、Windows でも WSL でも動かしていない
+similar_checked: これが最初の投稿候補なので、似た投稿はなし
+triage: candidate
+triage_reason: 開発の対象を Windows に移す時期で、導入の形の判断に直接かかわる。一次情報で確かめられる
+updated_on: 2026-11-25

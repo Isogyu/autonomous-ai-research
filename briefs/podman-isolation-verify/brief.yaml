@@ -1,0 +1,91 @@
+id: podman-isolation-verify
+purpose: try
+verification: self_verified
+verification_basis: このリポジトリの CI（Linux）で、コンテナの中から制限を確かめるテストを動かして通った。Windows では動かしていない
+audience:
+  segment: 社内の Windows PC で、AI が書いたコードをコンテナで動かそうとしている開発の担当
+  relevance: コンテナに制限を指定しても、環境によっては効かない。効いているかを、動かす前に確かめる方法が要る
+  need:
+    who: AI が書いたコードをコンテナで動かしたい開発の担当
+    wants_to: 指定した制限が、自分の環境で実際に効いているかを確かめたい
+    so_that: 効いていない環境で、隔離できたつもりでコードを動かさずに済む
+    evidence: assumed
+    evidence_note: 読者に確かめていない。コンテナを使う読者がいるか、ここまでの手順を必要とするかは、docs/briefs/reader-needs.md の質問で確かめる
+headline: コンテナの隔離が効いているか、中から確かめる
+takeaways:
+  - 制限は、指定しただけでは効いたか分からない
+  - コンテナの中から、通信・書き込み・上限を確かめる
+  - 確かめていない構成では、実行しない作りにした
+constraints:
+  - 確認は Linux だけ。Windows は未確認
+  - '手順のコードは未マージ（PR #12）'
+unconfirmed:
+  - Windows 上の Podman の仮想環境で、同じ確認が通るか
+  - クライアントとは別の場所で動く Podman で、作業用のフォルダーを渡せるか
+  - 社内で Podman を使えるか
+change: これまでは、制限を指定したことをもって隔離できたと扱っていた。指定が効かない構成があるので、中から確かめる手順を足した
+why_now: コンテナの実行を Docker から Podman に替える準備をしている。替えるだけでは隔離は成立しないので、確かめ方を先に共有する
+evidence_strength: moderate
+evidence_strength_note: 自分たちの実測で、手順と記録が残っている。ただし環境は Linux の CI の 1 種類だけで、社内の Windows PC での結果ではない
+sources:
+  - title: 'PR #12 の CI の実行（podman の経路）'
+    url: https://github.com/Isogyu/autonomous-ai-research/actions/runs/45628443267
+    publisher: このリポジトリ
+    kind: primary
+    checked_on: 2026-11-25
+    version: コミット 16abf79
+    supports: Linux の Podman 5.7.0（rootless、cgroups v2、crun）で、隔離の確認のテスト 5 件が通ったこと
+    reports_verification: true
+  - title: podman-run（Podman の公式の文書）
+    url: https://docs.podman.io/en/latest/markdown/podman-run.1.html
+    publisher: Podman
+    kind: primary
+    checked_on: 2026-11-25
+    version: latest（ページに版の記載なし）
+    supports: 資源の上限の指定が使えない構成があること（cgroups v1 の rootless）
+    read_scope: partial
+evidence:
+  environment: GitHub Actions の Linux の実行環境。Podman 5.7.0、rootless、cgroups v2、crun
+  procedure:
+    - 動かすイメージを取得し、ダイジェストで固定する
+    - 通信なし・読み取り専用・資源の上限・権限の削除を指定して、コンテナを起動する
+    - コンテナの中から、通信、書き込み、上限の値、権限、利用者を調べる
+    - 時間切れのあとに、コンテナとプロセスが残っていないことを調べる
+  result: 隔離の確認のテスト 5 件がすべて通った。通信に出られない、ルートに書けない、上限の値が指定どおり、権限がない、root 以外で動く、時間切れのあとに何も残らない
+  measured_on: 2026-11-25
+  record: 'PR #12 の CI の実行 45628443267（podman の経路）。テストは tests/test_podman_real.py'
+  not_covered:
+    - Windows 上の Podman の仮想環境（WSL 2、Hyper-V）
+    - クライアントとは別の場所で動く Podman への接続
+    - rootful の構成
+diagram:
+  kind: steps
+  question: 隔離を、どう確かめるか
+  rows:
+    - {label: イメージを取得して固定する}
+    - {label: 制限を指定して起動する}
+    - {label: 中から制限を確かめる, note: 通信・書き込み・上限・権限}
+    - {label: 通らなければ実行しない}
+  long_description: 手順は 4 つ。まず、動かすイメージを取得して内容を固定する。次に、通信なし・読み取り専用・資源の上限を指定してコンテナを起動する。そのコンテナの中から、通信に出られないこと、書き込めないこと、上限の値、権限を確かめる。1 つでも通らなければ、その環境ではコードを実行しない。
+detail:
+  conclusion: コンテナの制限は、指定したあとに、コンテナの中から確かめられる。Linux の Podman では、確かめる手順が通った。Windows ではまだ確かめていない。
+  applies_when:
+    - AI が書いたコードを、Podman のコンテナで動かそうとしている
+    - Podman を使える環境がある（社内の Windows PC については、利用の可否が未確認）
+  environment: 'Podman と、取得済みの Python のイメージ。このリポジトリの PR #12（未マージ）のコード。確かめたのは Linux だけ'
+  steps:
+    - 'PR #12 のブランチ（feat/windows-podman）を取得する'
+    - Python のイメージを取得し、ダイジェストつきの名前を控える
+    - 隔離の検証のコマンド（aar podman verify）を実行する
+    - 項目ごとの結果を読む。通らない項目があれば、指定を緩めずに、構成を見直す
+  results:
+    - Linux の CI（Podman 5.7.0、rootless、cgroups v2）で、確認のテスト 5 件が通った
+    - PostgreSQL の起動・接続・停止も、同じ環境の Podman で通った
+  failures:
+    - テストが、イメージに元からある環境変数を、秘密情報の漏れと誤って判定した。判定の条件を直した
+    - Windows と、別の場所で動く Podman への接続は、試せる環境がなく、結果がない
+similar_posts: [ai-code-where-to-run]
+similar_checked: 方式の比較（ai-code-where-to-run）と出典が重なる。こちらは、確かめる手順と自分たちの実測
+triage: candidate
+triage_reason: 自分たちの実測があり、手順を共有できる。確かめた環境が限られる点は、検証の状況と制約に書いた
+updated_on: 2026-11-25

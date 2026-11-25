@@ -465,5 +465,195 @@ def rescore() -> None:
         typer.echo(f"{discovery.score_unscored(conn, load_policy().scoring, limit=100000)} 件を採点した")
 
 
+# ---------------------------------------------------------------------- 社内向けの発信（Teams）。送信はしない
+
+brief_app = typer.Typer(help="社内向けの発信（Teams）の投稿候補。プレビューと状態の管理だけで、送信はしない", no_args_is_help=True)
+app.add_typer(brief_app, name="brief")
+BriefActor = Annotated[str, typer.Option("--actor", help="操作した主体。human:名前 / claude_code:セッション など（省略できない）")]
+
+
+def _brief_root() -> Any:
+    from aar.config import PROJECT_ROOT
+    return PROJECT_ROOT / "briefs"
+
+
+def _brief(fn: Any, *a: Any, **kw: Any) -> Any:
+    from pydantic import ValidationError
+
+    from aar.brief.store import BriefError
+    try:
+        return fn(*a, **kw)
+    except (BriefError, ValidationError, ValueError) as e:
+        typer.echo(f"できない: {e}", err=True)
+        raise typer.Exit(1) from e
+
+
+@brief_app.command("list")
+def brief_list() -> None:
+    """投稿候補と、その状態。"""
+    from aar.brief import store
+    from aar.brief.model import PURPOSE_LABEL, VERIFICATION_LABEL
+
+    root = _brief_root()
+    for bid in store.list_ids(root):
+        try:
+            b = store.read(root, bid)
+            typer.echo(f"{bid:44s} {PURPOSE_LABEL[b.purpose]:5s} {VERIFICATION_LABEL[b.verification]:12s} {store.state(root, b)['label']}"
+                       + (f"  ← {b.corrects} の訂正" if b.corrects else ""))
+        except Exception as e:  # noqa: BLE001 - 読めない候補も一覧には出す
+            typer.echo(f"{bid:44s} 読めない: {str(e).splitlines()[0][:80]}")
+
+
+@brief_app.command("validate")
+def brief_validate(brief_id: str) -> None:
+    """入力の検証と、送る前の機械的な確認。"""
+    from aar.brief import store
+
+    root = _brief_root()
+    b = _brief(store.read, root, brief_id)
+    checks = store.checks(root, b, store.source_texts(root, brief_id))
+    for c in checks:
+        typer.echo(f"{'✓' if c['ok'] else '✗'} {c['name']}: {c['detail']}")
+    for n in b.review_notes():
+        typer.echo(f"・人に見てほしい点: {n}")
+    typer.echo(f"状態: {store.state(root, b)['label']}")
+    if any(not c["ok"] and not c.get("unverified") for c in checks):
+        raise typer.Exit(1)
+
+
+@brief_app.command("preview")
+def brief_preview(brief_id: Annotated[str, typer.Argument(help="省略すると、すべての候補")] = "") -> None:
+    """カード・本文・詳細ページ・プレビュー（HTML）を、ローカルに作る。Teams には送らない。"""
+    from aar.brief import store
+
+    root = _brief_root()
+    for bid in ([brief_id] if brief_id else store.list_ids(root)):
+        b = _brief(store.read, root, bid)
+        typer.echo(str(_brief(store.write_preview, root, b) / "preview.html"))
+
+
+@brief_app.command("export-png")
+def brief_export_png(brief_id: Annotated[str, typer.Argument(help="省略すると、すべての候補")] = "",
+                     browser: Annotated[str, typer.Option(help="ブラウザーの実行ファイル（省略すると Edge、Chrome、Chromium を探す。AAR_BROWSER_BIN でも指定できる）")] = "") -> None:
+    """図解カードを PNG にする（briefs/<id>/preview/card.png）。Teams のカードの画像は SVG に対応しないため。送信はしない。"""
+    from aar.brief import png, render, store
+
+    root = _brief_root()
+    failed = False
+    for bid in ([brief_id] if brief_id else store.list_ids(root)):
+        b = _brief(store.read, root, bid)
+        try:
+            info = png.svg_to_png(_brief(render.card_svg, b), root / bid / "preview" / "card.png", browser=browser)
+            typer.echo(f"{bid}: {info['width']}×{info['height']}、{info['bytes']} バイト、{info['browser_version'] or info['browser']} → {info['path']}")
+        except png.PngError as e:
+            failed = True
+            typer.echo(f"{bid}: できない: {e}", err=True)
+    typer.echo("文字の形は、この PC のフォントで決まる。Teams に貼る前に、画像を開いて、文字が正しく読めることを確かめる")
+    if failed:
+        raise typer.Exit(1)
+
+
+@brief_app.command("show")
+def brief_show(brief_id: str) -> None:
+    """状態の記録、訂正の関係、感想。"""
+    from aar.brief import store
+
+    root = _brief_root()
+    b = _brief(store.read, root, brief_id)
+    st = store.state(root, b)
+    _print({"id": b.id, "状態": st["label"], "内容のハッシュ": b.content_sha256()[:16], "訂正の履歴": store.corrections(root, b),
+            "この候補の訂正版": store.corrected_by(root, brief_id),
+            "記録": [{k: e[k] for k in ("at", "event", "actor_kind", "actor", "detail")} | {"content": e["content_sha256"][:16]} for e in st["events"]],
+            "感想": store.feedback_summary(root, brief_id)})
+
+
+def _transition(brief_id: str, event: str, actor: str, **kw: Any) -> None:
+    from aar.brief import store
+
+    ev = _brief(lambda: store.transition(_brief_root(), brief_id, event, store.parse_actor(actor), **kw))
+    typer.echo(f"{brief_id}: {event}（{ev['actor_kind']}:{ev['actor']}、内容 {ev['content_sha256'][:16]}）")
+
+
+@brief_app.command("submit")
+def brief_submit(brief_id: str, actor: BriefActor) -> None:
+    """レビュー待ちにする。"""
+    _transition(brief_id, "submitted", actor)
+
+
+@brief_app.command("approve")
+def brief_approve(brief_id: str, actor: BriefActor,
+                  confirm_shareable: Annotated[bool, typer.Option(help="社内に出してよい内容であることを、承認する人が確かめた")] = False,
+                  confirm_no_copied_text: Annotated[bool, typer.Option(help="第三者の文章をまとまった長さで写していないことを、承認する人が確かめた（照合元がないとき）")] = False,
+                  reason: str = "") -> None:
+    """承認する（人だけ）。承認は、いまの内容に結び付く。承認しても、送信はされない。"""
+    _transition(brief_id, "approved", actor, confirm_shareable=confirm_shareable, confirm_no_copied_text=confirm_no_copied_text, reason=reason)
+
+
+@brief_app.command("hold")
+def brief_hold(brief_id: str, actor: BriefActor, reason: Annotated[str, typer.Option(help="理由")]) -> None:
+    """保留にする。"""
+    _transition(brief_id, "held", actor, reason=reason)
+
+
+@brief_app.command("reject")
+def brief_reject(brief_id: str, actor: BriefActor, reason: Annotated[str, typer.Option(help="理由")]) -> None:
+    """棄却する。"""
+    _transition(brief_id, "rejected", actor, reason=reason)
+
+
+@brief_app.command("archive")
+def brief_archive(brief_id: str, actor: BriefActor, reason: Annotated[str, typer.Option(help="理由")]) -> None:
+    """配信せず、検索用に残す。"""
+    _transition(brief_id, "archived", actor, reason=reason)
+
+
+@brief_app.command("reopen")
+def brief_reopen(brief_id: str, actor: BriefActor, reason: Annotated[str, typer.Option(help="理由")]) -> None:
+    """保留・棄却・保存から、下書きに戻す。"""
+    _transition(brief_id, "reopened", actor, reason=reason)
+
+
+@brief_app.command("correct")
+def brief_correct(brief_id: str, actor: BriefActor, note: Annotated[str, typer.Option(help="何を、なぜ訂正するのか")]) -> None:
+    """訂正版の下書きを作る。元の候補は書き換えない。"""
+    from aar.brief import store
+
+    new_id = _brief(lambda: store.start_correction(_brief_root(), brief_id, note, store.parse_actor(actor)))
+    typer.echo(f"訂正版の下書き: briefs/{new_id}/brief.yaml（内容を直してから、submit → approve）")
+
+
+@brief_app.command("record-post")
+def brief_record_post(brief_id: str, actor: BriefActor, where: Annotated[str, typer.Option(help="投稿先（チームとチャネルの名前）")],
+                      reference: Annotated[str, typer.Option(help="投稿へのリンクなど")] = "",
+                      detail_location: Annotated[str, typer.Option(help="詳細ページを置いた場所")] = "") -> None:
+    """人が Teams に投稿した事実を記録する（この基盤は送信しない）。"""
+    from aar.brief import store
+
+    ev = _brief(lambda: store.record_post(_brief_root(), brief_id, store.parse_actor(actor), where=where, reference=reference,
+                                          detail_location=detail_location))
+    typer.echo(f"{brief_id}: 投稿を記録した（{ev['detail']['where']}）")
+
+
+@brief_app.command("feedback")
+def brief_feedback(brief_id: str, actor: BriefActor, reader_group: Annotated[str, typer.Option(help="読者の区分（個人の名前は書かない）")],
+                   answer: Annotated[list[str] | None, typer.Option(help="項目=値。例: understood=yes（項目の一覧は feedback-summary）")] = None,
+                   blocked_at: Annotated[str, typer.Option(help="試そうとして止まった所")] = "", note: str = "") -> None:
+    """小規模の試行での感想を 1 件記録する（答えは任意）。"""
+    from aar.brief import store
+
+    answers = dict(a.split("=", 1) for a in (answer or []) if "=" in a)
+    _brief(lambda: store.add_feedback(_brief_root(), brief_id, reader_group=reader_group, recorded_by=store.parse_actor(actor),
+                                      answers=answers, note=note, blocked_at=blocked_at))
+    typer.echo("記録した")
+
+
+@brief_app.command("feedback-summary")
+def brief_feedback_summary(brief_id: Annotated[str, typer.Argument(help="省略すると、すべて")] = "") -> None:
+    """感想の件数（点数にはまとめない）。"""
+    from aar.brief import store
+
+    _print({"項目": store.FEEDBACK_FIELDS} | store.feedback_summary(_brief_root(), brief_id))
+
+
 if __name__ == "__main__":
     app()
